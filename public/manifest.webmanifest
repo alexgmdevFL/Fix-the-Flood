@@ -1,0 +1,10 @@
+{
+  "name": "High Water",
+  "short_name": "High Water",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#bfd8ea",
+  "theme_color": "#145a7a",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

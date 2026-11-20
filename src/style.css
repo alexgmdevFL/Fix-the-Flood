@@ -1,0 +1,32 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd8ea; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #1d2a33; -webkit-tap-highlight-color: transparent; }
+#app canvas { display: block; touch-action: none; }
+.hud { position: fixed; pointer-events: none; }
+.hud > * { pointer-events: auto; }
+#top { top: 0; left: 0; right: 0; padding: 10px 16px; background: linear-gradient(#ffffffd9, #ffffff00); }
+#top h1 { margin: 0; font-size: 17px; letter-spacing: 0.02em; }
+#mode { font-weight: 600; font-size: 14px; }
+#concept, #stats { font-size: 12px; opacity: 0.85; }
+#stats { font-variant-numeric: tabular-nums; white-space: pre; }
+#note { top: 96px; left: 16px; right: 16px; max-width: 520px; font-size: 13px; background: #102230d0; color: #fff; padding: 8px 12px; border-radius: 10px; pointer-events: none; }
+#note:empty { display: none; }
+#panel { right: 16px; top: 96px; width: 220px; background: #ffffffe6; border-radius: 12px; padding: 10px; font-size: 13px; box-shadow: 0 4px 16px #0002; }
+#panel.collapsed .body { display: none; }
+#panel label { display: block; margin-top: 8px; }
+#panel input[type=range] { width: 100%; }
+#panel .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+#tools { bottom: 0; left: 0; right: 0; display: flex; gap: 6px; justify-content: center; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: linear-gradient(#ffffff00, #ffffffd9); overflow-x: auto; }
+button { font: inherit; font-size: 13px; border: 1px solid #0003; background: #fff; border-radius: 9px; padding: 8px 11px; cursor: pointer; color: inherit; }
+button.on, button.primary { background: #145a7a; color: #fff; border-color: #145a7a; }
+#tools button { min-width: 64px; }
+#modal { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100% - 32px)); background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 10px 40px #0004; }
+#modal h2 { margin: 0 0 8px; font-size: 18px; }
+#modal .grade { font-weight: 700; font-size: 16px; }
+#modal .grade.good { color: #1b7a3d; }
+#modal .grade.bad { color: #b3261e; }
+#modal .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.hidden { display: none !important; }
+@media (max-width: 640px) {
+  #panel { top: auto; bottom: 64px; right: 16px; left: 16px; width: auto; }
+  #note { top: 92px; }
+}
