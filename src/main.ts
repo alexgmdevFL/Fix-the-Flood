@@ -33,6 +33,7 @@ const sim = new Sim(buildLevel1());
 const sound = new Sound();
 const tutorial = new Tutorial(document.getElementById('tut')!);
 const world = new World(document.getElementById('app')!, sim);
+world.onLightning = () => sound.thunder();
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 let scenario: Scenario | null = null;
@@ -139,6 +140,11 @@ function exitReplay() {
 }
 
 function updatePlay() { $('play').textContent = playing ? 'Pause' : 'Play'; }
+
+function selectTool(t: string) {
+  tool = t as Tool;
+  document.querySelectorAll<HTMLElement>('[data-tool]').forEach(o => o.classList.toggle('on', o.dataset.tool === t));
+}
 
 // Tools
 document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(b => {
@@ -278,7 +284,7 @@ function frame(now: number) {
     $('rpTime').textContent = `${Math.floor(f.t / 60)}h ${String(Math.floor(f.t % 60)).padStart(2, '0')}m  tide ${f.tide.toFixed(1)} ft`;
     $('note').textContent = `Replay. ${replay.note}`;
   } else {
-    if (world.lens === 'flow') sim.computeFlow(liveVx, liveVy);
+    sim.computeFlow(liveVx, liveVy);
     view = { water: sim.water, vx: liveVx, vy: liveVy, tide: sim.tide, rain: sim.rain, live: true };
     $('note').textContent = now < toastUntil ? toast : liveNote(sim);
   }
@@ -288,7 +294,7 @@ function frame(now: number) {
   const hrs = Math.floor(sim.time / 60), mins = Math.floor(sim.time % 60);
   const worstNow = Math.max(0, ...sim.houses.map(h => h.depth)) * 12;
   $('stats').textContent = `${hrs}h ${String(mins).padStart(2, '0')}m   Tide ${sim.tide.toFixed(1)} ft   Worst house ${(sim.stats.worst * 12).toFixed(1)} in${worstNow > 0 ? ' (flooding now)' : ''}`;
-  tutorial.update({ playing, time: sim.time, drains: sim.drains.length, finished: !!scenario && sim.time >= scenario.duration, pause: () => { playing = false; updatePlay(); } });
+  tutorial.update({ playing, time: sim.time, drains: sim.drains.length, finished: !!scenario && sim.time >= scenario.duration, tool, pause: () => { playing = false; updatePlay(); }, hint: cells => world.setHints(cells), selectTool });
   sound.update(view.rain, view.live ? sim.drains.reduce((a, d) => a + Math.max(0, -d.flow), 0) : 0, view.live && playing && sim.pumps.some(p => p.flow > 0.02));
   world.update(dt, now / 1000, view);
   requestAnimationFrame(frame);

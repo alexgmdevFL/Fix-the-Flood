@@ -45,6 +45,10 @@ button.on, button.primary { background: #145a7a; color: #fff; border-color: #145
 #tut .tstep { font-size: 13px; font-weight: 700; color: #145a7a; text-transform: uppercase; letter-spacing: 0.05em; }
 #tut .row { display: flex; gap: 8px; flex-wrap: wrap; }
 body.tutorial #note, body.tutorial #zoom { display: none; }
+.tut-target { outline: 3px solid #ffaa00 !important; outline-offset: 2px; animation: tutpulse 1.1s ease-out infinite; position: relative; z-index: 3; }
+@keyframes tutpulse { 0% { box-shadow: 0 0 0 0 rgba(255, 170, 0, 0.9); } 75% { box-shadow: 0 0 0 16px rgba(255, 170, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 170, 0, 0); } }
+#tutArrow { position: fixed; z-index: 6; transform: translate(-50%, -100%); background: #ffaa00; color: #1a1a1a; font-weight: 800; font-size: 16px; padding: 6px 12px; border-radius: 10px; pointer-events: none; white-space: nowrap; box-shadow: 0 4px 12px #0004; animation: tutbob 0.8s ease-in-out infinite alternate; }
+@keyframes tutbob { from { margin-top: 0; } to { margin-top: -8px; } }
 .hidden { display: none !important; }
 @media (max-width: 640px) {
   #top h1 { font-size: 20px; }

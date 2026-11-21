@@ -52,6 +52,22 @@ export class Sound {
     this.hum.gain.setTargetAtTime(pumping ? 0.06 : 0, t, 0.3);
   }
 
+  /** Rolling thunder a moment after a lightning flash. */
+  thunder() {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, t = ctx.currentTime + 0.8 + Math.random() * 1.5;
+    const len = 3;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < d.length; i++) { last = last * 0.98 + (Math.random() * 2 - 1) * 0.2; d[i] = last; }
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 160;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.9, t + 0.15); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    src.connect(lp); lp.connect(g); g.connect(this.master); src.start(t); src.stop(t + len);
+  }
+
   click() {
     if (!this.ctx || this.muted) return;
     const o = this.ctx.createOscillator(), g = this.ctx.createGain(), t = this.ctx.currentTime;

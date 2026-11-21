@@ -10,7 +10,7 @@
 ## Next
 - Milestone 4: second system (sewage or power) and its interactions with water.
 - Real Volusia terrain (LiDAR) and NOAA tide data for a later level.
-- Merge the session branch into main.
+- Water: double the sim resolution (96x96) for smoother puddles and shorelines.
 
 ## On Ice
 - Supabase (progress, accounts, shared scenarios). Not until a feature needs it.
@@ -19,6 +19,9 @@
 <details>
 <summary>Recently Done</summary>
 
+- Tutorial points at the exact button (pulsing ring and Tap here marker) and shows glowing rings for drain spots.
+- Storm atmosphere (darker sky, dimmer sun, lightning and thunder), wet glossy ground, water shader rebuilt (flow-direction ripples, rain rings, foam, mirror-like shallow sheets), raindrop splashes, drain swirls, animated sea.
+- Live site fixed: Netlify deploys from main; session branch merged.
 - Setting: Halifax Shores, Volusia County (Halifax River and Atlantic), real Volusia facts after each storm. Audience students and adults, easy difficulty.
 - Level 1 polish: guided first storm, drains pipe into nearby ponds, wall tool, procedural sound, star ratings and Level complete, sim unit tests (`npm test`).
 - Milestone 3: House, Street, Watershed and Region zoom with camera flights, detail hiding and map labels. Watershed (bowl depth, bay vs ocean drainage), High tide and Pipes lenses. `src/sim/watershed.ts`.

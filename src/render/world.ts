@@ -5,7 +5,7 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { S, type Sim } from '../sim/grid.ts';
 import { OUTFALL_ROW } from '../levels/level1.ts';
-import { makeWaterMaterial } from './water.ts';
+import { makeWaterMaterial, makeSeaNormals } from './water.ts';
 import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.ts';
 import { computeWatershed, type Watershed } from '../sim/watershed.ts';
 
@@ -14,7 +14,7 @@ export type Lens = 'surface' | 'elevation' | 'groundwater' | 'flow' | 'tide' | '
 export type Zoom = 'house' | 'street' | 'watershed' | 'region';
 const MAP_LENSES: Lens[] = ['elevation', 'groundwater', 'tide', 'watershed'];
 // Camera presets: distance and polar angle (0 = straight down)
-const ZOOMS: Record<Zoom, [number, number]> = { house: [6.5, 1.0], street: [40, 0.86], watershed: [64, 0.22], region: [150, 0.5] };
+const ZOOMS: Record<Zoom, [number, number]> = { house: [9, 0.95], street: [40, 0.86], watershed: [64, 0.22], region: [150, 0.5] };
 export interface View { water: Float32Array; vx: Float32Array | null; vy: Float32Array | null; tide: number; rain: number; live: boolean }
 
 // Quality tier: ?q=low or ?q=high forces it, otherwise touch devices with few cores or little memory get low.
@@ -43,7 +43,7 @@ const rotXZ = (lx: number, lz: number, a: number): [number, number] => [lx * Mat
 
 interface Batch { meshes: THREE.InstancedMesh[]; tinted: THREE.InstancedMesh[] }
 interface Slot { type: HouseType; idx: number; gx: number; gy: number; rot: number; color: THREE.Color; car: boolean }
-interface Particle { v: THREE.Vector3; life: number }
+interface Particle { v: THREE.Vector3; life: number; g: number }
 
 export class World {
   renderer: THREE.WebGLRenderer;
@@ -86,6 +86,16 @@ export class World {
   outline: THREE.LineLoop;
   private tween: { p0: THREE.Vector3; p1: THREE.Vector3; t0: THREE.Vector3; t1: THREE.Vector3; start: number } | null = null;
   camDist = 40;
+  private sunLight!: THREE.DirectionalLight;
+  private hemi!: THREE.HemisphereLight;
+  private stormDome!: THREE.Mesh;
+  private storm = 0;
+  private flash = 0;
+  onLightning: (() => void) | null = null;
+  private wet: Float32Array;
+  private wetT = 0;
+  private hints = new THREE.Group();
+  private seaNormal: THREE.DataTexture;
 
   constructor(parent: HTMLElement, sim: Sim) {
     this.sim = sim;
@@ -108,6 +118,9 @@ export class World {
     su.turbidity.value = 3.5; su.rayleigh.value = 1.3; su.mieCoefficient.value = 0.004; su.mieDirectionalG.value = 0.8;
     su.sunPosition.value.copy(sunDir);
     this.scene.add(sky);
+    // Overcast dome that fades in with the rain
+    this.stormDome = new THREE.Mesh(new THREE.SphereGeometry(900, 24, 12), new THREE.MeshBasicMaterial({ color: 0x59626a, transparent: true, opacity: 0, side: THREE.BackSide, depthWrite: false, fog: false }));
+    this.stormDome.renderOrder = -1;
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(this.scene, 0.02, 0.1, 3000).texture;
     this.scene.environmentIntensity = 0.7;
@@ -124,10 +137,13 @@ export class World {
     this.controls.maxDistance = 200;
     this.controls.addEventListener('start', () => { this.tween = null; });
 
-    this.scene.add(new THREE.HemisphereLight(0xdcecff, 0x7a6a4a, 0.7));
+    this.scene.add(this.stormDome);
+    this.hemi = new THREE.HemisphereLight(0xdcecff, 0x7a6a4a, 0.7);
+    this.scene.add(this.hemi);
     const sun = new THREE.DirectionalLight(0xfff0d8, 3.2);
     sun.position.copy(sunDir).multiplyScalar(60);
     sun.castShadow = true;
+    this.sunLight = sun;
     sun.shadow.mapSize.setScalar(LOW ? 1024 : 2048);
     const sc = sun.shadow.camera;
     sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30; sc.near = 1; sc.far = 140;
@@ -147,7 +163,16 @@ export class World {
     for (let i = 0; i < m * m; i++) tp.setY(i, this.pad.elev[i] * VS);
     tg.computeVertexNormals();
     tg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(m * m * 3), 3));
+    tg.setAttribute('aWet', new THREE.BufferAttribute(new Float32Array(m * m), 1));
+    this.wet = new Float32Array(n * n);
     this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras(), LOW ? 1024 : 2048), roughness: 0.95, vertexColors: true });
+    // Rain makes the ground darker and glossy (wet asphalt reflects the sky)
+    this.groundMat.onBeforeCompile = sh => {
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aWet;\nvarying float vWet;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWet = aWet;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWet;')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.14, vWet);')
+        .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix(1.0, 0.58, vWet);');
+    };
     this.lensMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
     this.terrain = new THREE.Mesh(tg, this.groundMat);
     this.terrain.receiveShadow = true;
@@ -155,7 +180,9 @@ export class World {
     this.paintColors();
 
     // Open sea beyond the grid on the bay and ocean sides
-    const seaMat = new THREE.MeshStandardMaterial({ color: 0x1b5566, roughness: 0.12, metalness: 0.1 });
+    this.seaNormal = makeSeaNormals();
+    this.seaNormal.repeat.set(60, 60);
+    const seaMat = new THREE.MeshStandardMaterial({ color: 0x1b5566, roughness: 0.18, metalness: 0.1, normalMap: this.seaNormal, normalScale: new THREE.Vector2(0.5, 0.5) });
     const half = n / 2 - 0.5, F = 400;
     const seaRect = (x0: number, x1: number, z0: number, z1: number) => {
       const p = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), seaMat);
@@ -195,6 +222,9 @@ export class World {
     const da = new THREE.BufferAttribute(new Float32Array(n * n), 1);
     da.setUsage(THREE.DynamicDrawUsage);
     wg.setAttribute('aDepth', da);
+    const fa = new THREE.BufferAttribute(new Float32Array(n * n * 2), 2);
+    fa.setUsage(THREE.DynamicDrawUsage);
+    wg.setAttribute('aFlow', fa);
     this.waterMat = makeWaterMaterial(sunDir);
     this.water = new THREE.Mesh(wg, this.waterMat);
     this.water.renderOrder = 1;
@@ -209,6 +239,7 @@ export class World {
     this.cursor.renderOrder = 3;
     this.cursor.visible = false;
     this.scene.add(this.cursor);
+    this.scene.add(this.hints);
 
     // Flow arrows (flow lens and replay)
     const shape = new THREE.Shape([new THREE.Vector2(0, 0.42), new THREE.Vector2(0.24, 0.02), new THREE.Vector2(0.08, 0.02), new THREE.Vector2(0.08, -0.36), new THREE.Vector2(-0.08, -0.36), new THREE.Vector2(-0.08, 0.02), new THREE.Vector2(-0.24, 0.02)]);
@@ -231,8 +262,8 @@ export class World {
     const MAXP = 500;
     const pg = new THREE.BufferGeometry();
     pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAXP * 3).fill(-100), 3));
-    for (let k = 0; k < MAXP; k++) this.partData.push({ v: new THREE.Vector3(), life: 0 });
-    this.parts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xe6f2ff, size: 0.12, transparent: true, opacity: 0.9 }));
+    for (let k = 0; k < MAXP; k++) this.partData.push({ v: new THREE.Vector3(), life: 0, g: 6 });
+    this.parts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xe6f2ff, size: 0.09, transparent: true, opacity: 0.85 }));
     this.parts.frustumCulled = false;
     this.scene.add(this.parts);
 
@@ -548,7 +579,26 @@ export class World {
     this.outfallPos.x -= 0.6;
   }
 
+  /** Pulsing rings that show the player where to tap (tutorial). */
+  private hintCells: number[] = [];
+  setHints(cells: number[]) {
+    this.hintCells = cells;
+    this.hints.clear();
+    const g = new THREE.RingGeometry(0.35, 0.55, 28);
+    g.rotateX(-Math.PI / 2);
+    const mtl = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.95, depthTest: false });
+    for (const i of cells) {
+      if (this.sim.drainAt(i)) continue;
+      const r = new THREE.Mesh(g, mtl);
+      const p = this.toWorld(i);
+      r.position.set(p.x, p.y + 0.08, p.z);
+      r.renderOrder = 6;
+      this.hints.add(r);
+    }
+  }
+
   rebuildProps() {
+    if (this.hintCells.length) this.setHints(this.hintCells);
     this.buildPipes();
     this.props.clear();
     const { drain, check_valve, pump } = this.assets;
@@ -610,14 +660,15 @@ export class World {
     a.set([x, y, z, x + 0.08, y + 0.7, z + 0.05], k * 6);
   }
 
-  private spawn(pos: THREE.Vector3, vel: THREE.Vector3, spread: number) {
+  private spawn(pos: THREE.Vector3, vel: THREE.Vector3, spread: number, life = 0.7, g = 6) {
     const k = this.partHead;
     this.partHead = (k + 1) % this.partData.length;
     const pa = this.parts.geometry.attributes.position as THREE.BufferAttribute;
     pa.setXYZ(k, pos.x + (Math.random() - 0.5) * 0.25, pos.y, pos.z + (Math.random() - 0.5) * 0.25);
     const d = this.partData[k];
     d.v.set(vel.x + (Math.random() - 0.5) * spread, vel.y * (0.7 + Math.random() * 0.5), vel.z + (Math.random() - 0.5) * spread);
-    d.life = 0.7;
+    d.life = life;
+    d.g = g;
   }
 
   update(dt: number, t: number, v: View) {
@@ -662,16 +713,57 @@ export class World {
     }
     this.waterMat.uniforms.uTime.value = t;
     this.sea.position.y = v.tide * VS - 0.03;
+    this.seaNormal.offset.set(t * 0.004, t * 0.0025);
+
+    // Storm atmosphere follows the rain
+    this.storm += (Math.min(1, v.rain / 3) - this.storm) * Math.min(1, dt * 0.8);
+    const st = this.storm;
+    if (st > 0.6 && Math.random() < dt * 0.05 * st) { this.flash = 1; this.onLightning?.(); }
+    this.flash = Math.max(0, this.flash - dt * 4);
+    const fl = this.flash * (0.6 + 0.4 * Math.sin(t * 60));
+    this.sunLight.intensity = 3.2 * (1 - 0.62 * st);
+    this.hemi.intensity = 0.7 + 0.25 * st + fl * 2.5;
+    this.renderer.toneMappingExposure = 0.75 - 0.05 * st + fl * 0.4;
+    this.scene.environmentIntensity = 0.7 - 0.3 * st;
+    (this.stormDome.material as THREE.MeshBasicMaterial).opacity = 0.75 * st;
+    (this.scene.fog as THREE.Fog).color.setRGB(0.79 - 0.3 * st + fl * 0.2, 0.86 - 0.3 * st + fl * 0.2, 0.9 - 0.28 * st + fl * 0.2);
+    this.waterMat.uniforms.uRain.value = Math.min(1, v.rain / 4);
+    this.waterMat.uniforms.uDark.value = st;
+
+    // Ground wetness: soaks in with rain, stays wet under water, dries slowly after
+    const wet = this.wet;
+    for (let i = 0; i < n * n; i++) {
+      if (v.water[i] > 0.01) wet[i] = 1;
+      else wet[i] = Math.min(1, Math.max(0, wet[i] + (v.rain > 0 ? dt * v.rain * 0.12 : -dt * 0.015)));
+    }
+    if ((this.wetT += dt) > 0.15) {
+      this.wetT = 0;
+      const { m } = this.pad;
+      const wa = this.terrain.geometry.attributes.aWet as THREE.BufferAttribute;
+      const outside = Math.min(1, st * 1.2);
+      for (let y = 0; y < m; y++) for (let x = 0; x < m; x++) {
+        const gx = x - PAD, gy = y - PAD;
+        wa.setX(y * m + x, gx >= 0 && gy >= 0 && gx < n && gy < n ? wet[gy * n + gx] : outside);
+      }
+      wa.needsUpdate = true;
+    }
+
+    // Tutorial hint rings pulse
+    const pulse = 1 + 0.25 * Math.sin(t * 6);
+    for (const h of this.hints.children) h.scale.setScalar(pulse);
 
     const wp = this.water.geometry.attributes.position as THREE.BufferAttribute;
     const wd = this.water.geometry.attributes.aDepth as THREE.BufferAttribute;
+    const wf = this.water.geometry.attributes.aFlow as THREE.BufferAttribute;
     for (let i = 0; i < n * n; i++) {
       const d = sim.open[i] ? 0 : v.water[i];
       wp.setY(i, d > 0.004 ? (sim.elev[i] + d) * VS : sim.elev[i] * VS - 0.03);
       wd.setX(i, d);
+      if (v.vx && v.vy) wf.setXY(i, v.vx[i], v.vy[i]);
     }
     wp.needsUpdate = true;
     wd.needsUpdate = true;
+    wf.needsUpdate = true;
 
     // Walls turn red while water is above the floor
     sim.houses.forEach((h, k) => {
@@ -713,6 +805,29 @@ export class World {
         this.spawn(p, new THREE.Vector3(-1.0, 0.8, 0), 0.3);
       }
     }
+    // Water swirling into working drains
+    for (const d of sim.drains) {
+      if (d.flow > 0.03 && sim.water[d.i] > 0.02 && Math.random() < Math.min(1, d.flow * 2)) {
+        const p = this.toWorld(d.i);
+        const a = Math.random() * Math.PI * 2, r = 0.45;
+        p.x += Math.cos(a) * r; p.z += Math.sin(a) * r; p.y += sim.water[d.i] * VS + 0.03;
+        this.spawn(p, new THREE.Vector3(-Math.sin(a) * 1.2 - Math.cos(a) * 0.8, 0, Math.cos(a) * 1.2 - Math.sin(a) * 0.8), 0.05, 0.45, 0);
+      }
+    }
+    // Raindrop splashes near the camera target
+    if (v.rain > 0) {
+      const tgt = this.controls.target;
+      const count = Math.min(6, v.rain * 1.5);
+      for (let k = 0; k < count; k++) {
+        const gx = Math.round(tgt.x + n / 2 - 0.5 + (Math.random() - 0.5) * 30), gy = Math.round(tgt.z + n / 2 - 0.5 + (Math.random() - 0.5) * 30);
+        if (gx < 0 || gy < 0 || gx >= n || gy >= n) continue;
+        const i = gy * n + gx;
+        if (sim.open[i]) continue;
+        const p = this.gridToWorld(gx + Math.random() - 0.5, gy + Math.random() - 0.5);
+        p.y = (sim.elev[i] + v.water[i]) * VS + 0.01;
+        this.spawn(p, new THREE.Vector3(0, 0.9, 0), 0.5, 0.22, 7);
+      }
+    }
     const outflow = sim.drains.reduce((s, d) => s + Math.max(0, d.flow), 0) + sim.pumps.reduce((s, p) => s + p.flow, 0);
     if (outflow > 0.05 && Math.random() < Math.min(1, outflow)) this.spawn(this.outfallPos, new THREE.Vector3(-2.2, 0.6, 0), 0.4);
     }
@@ -741,7 +856,7 @@ export class World {
       const d = this.partData[k];
       if (d.life <= 0) continue;
       d.life -= dt;
-      d.v.y -= 6 * dt;
+      d.v.y -= d.g * dt;
       if (d.life <= 0) { pa.setY(k, -100); continue; }
       pa.setXYZ(k, pa.getX(k) + d.v.x * dt, pa.getY(k) + d.v.y * dt, pa.getZ(k) + d.v.z * dt);
     }
