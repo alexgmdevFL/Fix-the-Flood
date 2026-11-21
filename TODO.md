@@ -1,9 +1,7 @@
 # TODO / Priorities
 
 ## Now (Milestone 1 polish)
-- Test on a mid-range Android phone. Target 30 fps. Drop shadow map to 1024 if needed.
-- Check frame rate with the new assets (about 150 palms, 24 houses, 2048 ground texture). Lower texture or palm count on weak phones.
-- Seam between the sim bay water and the open-sea planes at the grid edge.
+- Test on a real mid-range Android phone. Auto quality is in place (`?q=low` / `?q=high` to force).
 - Flow-map animation in the water shader (advect ripples along sim flux).
 - Move sim into a Web Worker.
 - Unit tests for sim (headless run already works with `node --experimental-strip-types`).
@@ -22,6 +20,8 @@
 <details>
 <summary>Recently Done</summary>
 
+- Quality tiers for weak phones (smaller texture and shadows, fewer palms, lower resolution) plus automatic resolution drop when fps falls under 28.
+- Removed the bay and ocean seam: the open sea plane covers all open water.
 - Vite + TypeScript + Three.js PWA scaffold, Netlify config.
 - Virtual-pipes water sim with rain, infiltration, groundwater, tide boundary.
 - Drains with tide-dependent outfall (backflow), check valves, pumps.

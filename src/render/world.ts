@@ -11,6 +11,15 @@ import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.t
 export const VS = 0.35; // world units per foot of elevation (vertical exaggeration)
 export type Lens = 'surface' | 'elevation';
 
+// Quality tier: ?q=low or ?q=high forces it, otherwise touch devices with few cores or little memory get low.
+export const LOW = (() => {
+  const q = new URLSearchParams(location.search).get('q');
+  if (q) return q === 'low';
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const touch = matchMedia('(pointer: coarse)').matches;
+  return touch && ((navigator.hardwareConcurrency ?? 8) <= 6 || (nav.deviceMemory ?? 8) <= 4);
+})();
+
 const ASSETS = ['house_ranch', 'house_twostory', 'house_modern', 'palm_a', 'palm_b', 'shrub', 'car', 'streetlight', 'drain', 'check_valve', 'pump'] as const;
 type AssetName = (typeof ASSETS)[number];
 const HOUSE_TYPES = ['house_ranch', 'house_twostory', 'house_modern'] as const;
@@ -51,7 +60,10 @@ export class World {
   props = new THREE.Group();
   cursor: THREE.Mesh;
   rain: THREE.LineSegments;
-  rainCount = 900;
+  rainCount = LOW ? 450 : 900;
+  pixelRatio = 1;
+  private fpsT = 0;
+  private fpsN = 0;
   parts: THREE.Points;
   partData: Particle[] = [];
   partHead = 0;
@@ -62,12 +74,13 @@ export class World {
     this.sim = sim;
     this.n = sim.n;
     const n = this.n;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ antialias: !LOW, powerPreference: 'high-performance' });
+    this.pixelRatio = Math.min(window.devicePixelRatio, LOW ? 1.25 : 2);
+    this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.75;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = LOW ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     parent.appendChild(this.renderer.domElement);
 
     // Physical sky, also baked into an environment map for reflections
@@ -97,7 +110,7 @@ export class World {
     const sun = new THREE.DirectionalLight(0xfff0d8, 3.2);
     sun.position.copy(sunDir).multiplyScalar(60);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.setScalar(LOW ? 1024 : 2048);
     const sc = sun.shadow.camera;
     sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30; sc.near = 1; sc.far = 140;
     sun.shadow.bias = -0.0004;
@@ -115,7 +128,7 @@ export class World {
     for (let i = 0; i < m * m; i++) tp.setY(i, this.pad.elev[i] * VS);
     tg.computeVertexNormals();
     tg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(m * m * 3), 3));
-    this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras()), roughness: 0.95 });
+    this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras(), LOW ? 1024 : 2048), roughness: 0.95 });
     this.lensMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
     this.terrain = new THREE.Mesh(tg, this.groundMat);
     this.terrain.receiveShadow = true;
@@ -132,8 +145,9 @@ export class World {
       this.sea.add(p);
     };
     const bayEdge = 6 - n / 2 + 0.5 - 0.1, oceanEdge = 40 - n / 2 + 0.5;
-    seaRect(-F, -half, -F, F); seaRect(-half, bayEdge, -F, -half); seaRect(-half, bayEdge, half, F);
-    seaRect(half, F, -F, F); seaRect(oceanEdge, half, -F, -half); seaRect(oceanEdge, half, half, F);
+    void half;
+    seaRect(-F, bayEdge, -F, F);
+    seaRect(oceanEdge, F, -F, F);
     this.scene.add(this.sea);
 
     // Sim water surface
@@ -351,7 +365,7 @@ export class World {
     }
     const { m, surf, elev } = this.pad;
     const nearHouse = (gx: number, gy: number) => this.slots.some(s => Math.abs(s.gx - gx) < 2.2 && Math.abs(s.gy - gy) < 1.9);
-    for (let t = 0; t < 2500 && palms[0].length + palms[1].length < 150; t++) {
+    for (let t = 0; t < 2500 && palms[0].length + palms[1].length < (LOW ? 70 : 150); t++) {
       const x = Math.floor(r() * m), y = Math.floor(r() * m), i = y * m + x;
       const gx = x - PAD + (r() - 0.5) * 0.6, gy = y - PAD + (r() - 0.5) * 0.6;
       const s = surf[i];
@@ -426,12 +440,12 @@ export class World {
     const { sim, n } = this;
     this.controls.update();
     this.waterMat.uniforms.uTime.value = t;
-    this.sea.position.y = sim.tide * VS - 0.01;
+    this.sea.position.y = sim.tide * VS - 0.03;
 
     const wp = this.water.geometry.attributes.position as THREE.BufferAttribute;
     const wd = this.water.geometry.attributes.aDepth as THREE.BufferAttribute;
     for (let i = 0; i < n * n; i++) {
-      const d = sim.water[i];
+      const d = sim.open[i] ? 0 : sim.water[i];
       wp.setY(i, d > 0.004 ? (sim.elev[i] + d) * VS : sim.elev[i] * VS - 0.03);
       wd.setX(i, d);
     }
@@ -488,6 +502,12 @@ export class World {
     }
     pa.needsUpdate = true;
 
+    this.fpsT += dt; this.fpsN++;
+    if (this.fpsT > 3) {
+      const fps = this.fpsN / this.fpsT;
+      if (fps < 28 && this.pixelRatio > 0.8) { this.pixelRatio = Math.max(0.75, this.pixelRatio - 0.25); this.renderer.setPixelRatio(this.pixelRatio); this.resize(); }
+      this.fpsT = 0; this.fpsN = 0;
+    }
     this.renderer.render(this.scene, this.camera);
   }
 }

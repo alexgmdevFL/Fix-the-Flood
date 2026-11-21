@@ -30,8 +30,7 @@ function rng(seed: number) {
   return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 
-export function paintGround(p: Padded, n: number, extras: Rect[]): THREE.CanvasTexture {
-  const SIZE = 2048;
+export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048): THREE.CanvasTexture {
   const { m, elev, surf } = p;
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
@@ -58,7 +57,7 @@ export function paintGround(p: Padded, n: number, extras: Rect[]): THREE.CanvasT
       g.fillRect((x - 0.5) * k, (y - 0.5) * k, k + 1, k + 1);
     }
   }
-  g.filter = 'blur(6px)';
+  g.filter = `blur(${SIZE / 340}px)`;
   g.drawImage(cv, 0, 0);
   g.filter = 'none';
 
@@ -72,7 +71,7 @@ export function paintGround(p: Padded, n: number, extras: Rect[]): THREE.CanvasT
   }
   const greens = ['rgba(70,110,45,0.5)', 'rgba(130,170,85,0.45)', 'rgba(95,135,55,0.5)', 'rgba(160,165,90,0.35)'];
   const sands = ['rgba(200,185,145,0.5)', 'rgba(245,235,205,0.5)', 'rgba(170,155,120,0.35)'];
-  for (let t = 0; t < 90000; t++) {
+  for (let t = 0; t < (SIZE * SIZE) / 46; t++) {
     const px = r() * SIZE, py = r() * SIZE, s = cellAt(px, py);
     if (s === S.Grass) g.fillStyle = greens[(r() * 4) | 0];
     else if (s === S.Sand) g.fillStyle = sands[(r() * 3) | 0];
@@ -95,7 +94,7 @@ export function paintGround(p: Padded, n: number, extras: Rect[]): THREE.CanvasT
     const onMain = r() < 0.6;
     const gx = onMain ? 18.5 + r() * 3 : 6.5 + r() * 30, gy = onMain ? Y0 + r() * (Y1 - Y0) : 21.5 + r() * 3;
     g.fillStyle = r() < 0.5 ? 'rgba(30,32,35,0.35)' : 'rgba(140,140,140,0.25)';
-    g.fillRect(X(gx), X(gy), 2, 2);
+    g.fillRect(X(gx), X(gy), SIZE / 1024, SIZE / 1024);
   }
   // Sidewalks and curbs
   const walk = '#cfcbc1', curb = '#e2ded5';
