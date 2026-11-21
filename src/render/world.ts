@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
-import { S, type Sim } from '../sim/grid.ts';
+import { S, LIFT_CAP, type Sim } from '../sim/grid.ts';
 import { OUTFALL_ROW } from '../levels/level1.ts';
 import { makeWaterMaterial, makeSeaNormals } from './water.ts';
 import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.ts';
@@ -12,10 +12,11 @@ import { computeWatershed, type Watershed } from '../sim/watershed.ts';
 export const VS = 0.35; // world units per foot of elevation (vertical exaggeration)
 export type Lens = 'surface' | 'elevation' | 'groundwater' | 'flow' | 'tide' | 'watershed' | 'pipes';
 export type Zoom = 'house' | 'street' | 'watershed' | 'region';
-const MAP_LENSES: Lens[] = ['elevation', 'groundwater', 'tide', 'watershed'];
+const MAP_LENSES: Lens[] = ['elevation', 'groundwater', 'tide'];
 // Camera presets: distance and polar angle (0 = straight down)
-const ZOOMS: Record<Zoom, [number, number]> = { house: [9, 0.95], street: [40, 0.86], watershed: [64, 0.22], region: [150, 0.5] };
-export interface View { water: Float32Array; vx: Float32Array | null; vy: Float32Array | null; tide: number; rain: number; live: boolean }
+const ZOOMS: Record<Zoom, [number, number]> = { house: [9, 0.95], street: [40, 0.86], watershed: [60, 0.3], region: [150, 0.5] };
+export interface View { water: Float32Array; conc: Float32Array | null; vx: Float32Array | null; vy: Float32Array | null; tide: number; rain: number; live: boolean }
+const SEWER_PIPE = -100000;
 
 // Quality tier: ?q=low or ?q=high forces it, otherwise touch devices with few cores or little memory get low.
 export const LOW = (() => {
@@ -82,7 +83,11 @@ export class World {
   detail: THREE.Object3D[] = [];
   pipes: THREE.InstancedMesh | null = null;
   pipeOwner: number[] = []; // drain index, or -1 - pump index
-  labels: { el: HTMLDivElement; pos: THREE.Vector3; min: number; max: number }[] = [];
+  labels: { el: HTMLDivElement; pos: THREE.Vector3; min: number; max: number; lens?: Lens }[] = [];
+  private ghost!: THREE.Mesh;
+  private sewageProps = new THREE.Group();
+  private septicRings: THREE.Mesh[] = [];
+  private liftRing: THREE.Mesh | null = null;
   outline: THREE.LineLoop;
   private tween: { p0: THREE.Vector3; p1: THREE.Vector3; t0: THREE.Vector3; t1: THREE.Vector3; start: number } | null = null;
   camDist = 40;
@@ -225,6 +230,9 @@ export class World {
     const fa = new THREE.BufferAttribute(new Float32Array(n * n * 2), 2);
     fa.setUsage(THREE.DynamicDrawUsage);
     wg.setAttribute('aFlow', fa);
+    const ca2 = new THREE.BufferAttribute(new Float32Array(n * n), 1);
+    ca2.setUsage(THREE.DynamicDrawUsage);
+    wg.setAttribute('aConc', ca2);
     this.waterMat = makeWaterMaterial(sunDir);
     this.water = new THREE.Mesh(wg, this.waterMat);
     this.water.renderOrder = 1;
@@ -233,6 +241,22 @@ export class World {
 
     this.buildOutfall();
     this.scene.add(this.props);
+    this.scene.add(this.sewageProps);
+
+    // "If nothing drained" bathtub: a striped ghost surface over the bowl behind the seawall
+    const gg = new THREE.PlaneGeometry(n - 1, n - 1, n - 1, n - 1);
+    gg.rotateX(-Math.PI / 2);
+    gg.setAttribute('aFill', new THREE.BufferAttribute(new Float32Array(n * n), 1));
+    this.ghost = new THREE.Mesh(gg, new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, uniforms: { uTime: { value: 0 } },
+      vertexShader: 'attribute float aFill; varying float vFill; varying vec3 vW; void main() { vFill = aFill; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+      fragmentShader: 'uniform float uTime; varying float vFill; varying vec3 vW; void main() { if (vFill < 0.03) discard; float s = step(0.5, fract((vW.x + vW.z) * 0.9 - uTime * 0.25)); float edge = 1.0 - smoothstep(0.03, 0.12, vFill); vec3 c = mix(vec3(0.35, 0.7, 1.0), vec3(1.0), edge); gl_FragColor = vec4(c, 0.28 + 0.14 * s + 0.4 * edge); }',
+    }));
+    this.ghost.renderOrder = 2;
+    this.ghost.frustumCulled = false;
+    this.ghost.visible = false;
+    this.scene.add(this.ghost);
+    this.updateGhost();
 
     this.cursor = new THREE.Mesh(new THREE.RingGeometry(0.38, 0.5, 24), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthTest: false }));
     this.cursor.rotation.x = -Math.PI / 2;
@@ -268,12 +292,12 @@ export class World {
     this.scene.add(this.parts);
 
     // Map labels, shown by zoom distance
-    const label = (text: string, gx: number, gy: number, y: number, min: number, max = 999) => {
+    const label = (text: string, gx: number, gy: number, y: number, min: number, max = 999, lens?: Lens) => {
       const el = document.createElement('div');
       el.className = 'maplabel';
       el.textContent = text;
       document.body.appendChild(el);
-      this.labels.push({ el, pos: new THREE.Vector3(gx - n / 2 + 0.5, y, gy - n / 2 + 0.5), min, max });
+      this.labels.push({ el, pos: new THREE.Vector3(gx - n / 2 + 0.5, y, gy - n / 2 + 0.5), min, max, lens });
     };
     label('Halifax River', 1, 12, 1, 50);
     label('Atlantic Ocean', 47, 32, 1, 50);
@@ -283,6 +307,7 @@ export class World {
     label('Main St', 20, 8, 2.2 * VS, 50, 110);
     label('Your neighborhood', 24, -3, 1.5, 90);
     label('Volusia County barrier island', 24, -40, 1, 90);
+    label('If nothing drained, water pools here', 20, 30, 3.4 * VS, 0, 999, 'watershed');
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -368,6 +393,15 @@ export class World {
     this.paintColors();
     this.terrain.material = MAP_LENSES.includes(l) ? this.lensMat : this.groundMat;
     if (this.pipes) this.pipes.visible = l === 'pipes';
+    this.ghost.visible = l === 'watershed';
+  }
+
+  private updateGhost() {
+    const n = this.n, { fill } = this.watershed;
+    const gp = this.ghost.geometry.attributes.position as THREE.BufferAttribute;
+    const ga = this.ghost.geometry.attributes.aFill as THREE.BufferAttribute;
+    for (let i = 0; i < n * n; i++) { gp.setY(i, (this.sim.elev[i] + fill[i]) * VS + 0.02); ga.setX(i, this.sim.open[i] ? 0 : fill[i]); }
+    gp.needsUpdate = true; ga.needsUpdate = true;
   }
 
   /** Fly the camera to a zoom preset. House zoom centers on the house nearest the current view. */
@@ -428,12 +462,11 @@ export class World {
         } else if (this.lens === 'watershed') {
           const { fill, basin } = this.watershed;
           if (sim.open[gi]) c.setRGB(0.12, 0.32, 0.6);
-          else if (fill[gi] > 0) { const t = Math.min(1, fill[gi] / 1.3); c.setRGB(0.6 - 0.45 * t, 0.8 - 0.35 * t, 1.0 - 0.1 * t); }
-          else if (basin[gi] === 1) c.setRGB(0.96, 0.72, 0.45);
-          else c.setRGB(0.5, 0.82, 0.6);
+          else if (basin[gi] === 1) c.setRGB(1.0, 0.86, 0.68); // drains toward the river (light tint over the map)
+          else c.setRGB(0.74, 0.96, 0.8); // drains toward the ocean
+          if (fill[gi] > 0) c.multiply(new THREE.Color(0.82, 0.9, 1.0));
           const bx = gx < n - 1 ? basin[gi + 1] : basin[gi];
-          if (!sim.open[gi] && bx !== basin[gi] && !sim.open[gi + 1]) c.setRGB(0.25, 0.2, 0.15); // the divide
-          c.convertSRGBToLinear();
+          if (!sim.open[gi] && bx !== basin[gi] && !sim.open[gi + 1]) c.setRGB(0.3, 0.22, 0.15); // the divide
         } else if (this.lens === 'pipes') {
           c.setRGB(0.3, 0.3, 0.34);
         } else {
@@ -462,6 +495,7 @@ export class World {
     this.terrain.geometry.computeVertexNormals();
     this.terrain.geometry.computeBoundingSphere();
     this.watershed = computeWatershed(this.sim);
+    this.updateGhost();
     this.paintColors();
     this.rebuildProps();
   }
@@ -597,7 +631,49 @@ export class World {
     }
   }
 
+  /** Septic lids, manholes, lift station and failure rings (Level 2). */
+  private buildSewage() {
+    this.sewageProps.clear();
+    this.septicRings = [];
+    this.liftRing = null;
+    const sim = this.sim;
+    if (!sim.septicOn) return;
+    const lid = new THREE.CylinderGeometry(0.2, 0.2, 0.05, 16);
+    const lidMat = new THREE.MeshStandardMaterial({ color: 0x9c9a8a, roughness: 0.9 });
+    const holeMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2c, roughness: 0.6, metalness: 0.5 });
+    const ringG = new THREE.RingGeometry(0.4, 0.6, 28);
+    ringG.rotateX(-Math.PI / 2);
+    const ringM = new THREE.MeshBasicMaterial({ color: 0x8a5a14, transparent: true, opacity: 0.95, depthTest: false });
+    for (const h of sim.houses) {
+      const cell = h.sewer ? h.manhole : h.septic;
+      const p = this.toWorld(cell);
+      const m = new THREE.Mesh(lid, h.sewer ? holeMat : lidMat);
+      m.position.set(p.x, p.y + 0.03, p.z);
+      this.sewageProps.add(m);
+      const r = new THREE.Mesh(ringG, ringM);
+      r.position.set(p.x, p.y + 0.08, p.z);
+      r.renderOrder = 6;
+      r.visible = false;
+      this.sewageProps.add(r);
+      this.septicRings.push(r);
+    }
+    if (sim.houses.some(h => h.sewer) && this.assets.pump) {
+      const ls = this.assets.pump.clone();
+      ls.position.copy(this.toWorld(sim.liftCell));
+      this.sewageProps.add(ls);
+      const r = new THREE.Mesh(ringG, new THREE.MeshBasicMaterial({ color: 0xff3322, transparent: true, depthTest: false }));
+      const p = this.toWorld(sim.liftCell);
+      r.position.set(p.x, p.y + 0.6, p.z);
+      r.scale.setScalar(1.6);
+      r.renderOrder = 6;
+      r.visible = false;
+      this.sewageProps.add(r);
+      this.liftRing = r;
+    }
+  }
+
   rebuildProps() {
+    this.buildSewage();
     if (this.hintCells.length) this.setHints(this.hintCells);
     this.buildPipes();
     this.props.clear();
@@ -634,6 +710,10 @@ export class World {
       segs.push([x, oy, ox, oy, k]);
     });
     this.sim.pumps.forEach((p, k) => { const x = p.i % this.n, y = Math.floor(p.i / this.n); segs.push([x, y, 5, y, -1 - k]); });
+    if (this.sim.septicOn) {
+      const lx = this.sim.liftCell % this.n, ly = Math.floor(this.sim.liftCell / this.n);
+      for (const h of this.sim.houses) if (h.sewer) segs.push([h.manhole % this.n, Math.floor(h.manhole / this.n), lx, ly, SEWER_PIPE]);
+    }
     this.pipeOwner = segs.map(s => s[4]);
     const g = new THREE.BoxGeometry(1, 0.08, 1);
     this.pipes = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }), Math.max(1, segs.length));
@@ -694,10 +774,10 @@ export class World {
     fog.far = 90 + dist * 2.2;
     const half = new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), pv = new THREE.Vector3();
     for (const lb of this.labels) {
-      const on = dist >= lb.min && dist <= lb.max;
+      const on = lb.lens ? this.lens === lb.lens : dist >= lb.min && dist <= lb.max;
       if (on) {
         pv.copy(lb.pos).project(this.camera);
-        const vis = pv.z < 1 && Math.abs(pv.x) < 1.1 && Math.abs(pv.y) < 1.1;
+        const vis = pv.z < 1 && Math.abs(pv.x) < 0.8 && Math.abs(pv.y) < 0.85;
         lb.el.style.display = vis ? 'block' : 'none';
         if (vis) lb.el.style.transform = `translate(${half.x + pv.x * half.x}px, ${half.y - pv.y * half.y}px) translate(-50%, -50%)`;
       } else lb.el.style.display = 'none';
@@ -705,6 +785,7 @@ export class World {
     if (this.pipes && this.lens === 'pipes') {
       const c = new THREE.Color();
       this.pipeOwner.forEach((o, k) => {
+        if (o === SEWER_PIPE) { c.setHex(sim.liftLoad > LIFT_CAP ? 0xff4433 : 0xb07a3a); this.pipes!.setColorAt(k, c); return; }
         const f = o >= 0 ? (sim.drains[o]?.flow ?? 0) : (sim.pumps[-1 - o]?.flow ?? 0);
         c.setHex(f < -0.01 ? 0xff4433 : f > 0.01 ? 0x3ee0ff : 0x8fa3b8);
         this.pipes!.setColorAt(k, c);
@@ -751,16 +832,23 @@ export class World {
     // Tutorial hint rings pulse
     const pulse = 1 + 0.25 * Math.sin(t * 6);
     for (const h of this.hints.children) h.scale.setScalar(pulse);
+    // Septic failures and an overloaded lift station pulse too
+    sim.houses.forEach((h, k) => { const r = this.septicRings[k]; if (r) { r.visible = v.live && !h.sewer && h.septicFail; r.scale.setScalar(pulse); } });
+    if (this.liftRing) { this.liftRing.visible = v.live && sim.liftLoad > LIFT_CAP; this.liftRing.scale.setScalar(1.6 * pulse); }
+    (this.ghost.material as THREE.ShaderMaterial).uniforms.uTime.value = t;
 
     const wp = this.water.geometry.attributes.position as THREE.BufferAttribute;
     const wd = this.water.geometry.attributes.aDepth as THREE.BufferAttribute;
     const wf = this.water.geometry.attributes.aFlow as THREE.BufferAttribute;
+    const wc = this.water.geometry.attributes.aConc as THREE.BufferAttribute;
     for (let i = 0; i < n * n; i++) {
       const d = sim.open[i] ? 0 : v.water[i];
       wp.setY(i, d > 0.004 ? (sim.elev[i] + d) * VS : sim.elev[i] * VS - 0.03);
       wd.setX(i, d);
       if (v.vx && v.vy) wf.setXY(i, v.vx[i], v.vy[i]);
+      wc.setX(i, v.conc ? v.conc[i] : 0);
     }
+    wc.needsUpdate = true;
     wp.needsUpdate = true;
     wd.needsUpdate = true;
     wf.needsUpdate = true;

@@ -8,7 +8,8 @@
 - PNG icons (192, 512) for older Android installs.
 
 ## Next
-- Milestone 4: second system (sewage or power) and its interactions with water.
+- Level 2 polish: sealed manhole lids tool, septic tutorial step, nutrient load to the river.
+- Milestone 5: power (substations flood, pumps lose power, backup generators).
 - Real Volusia terrain (LiDAR) and NOAA tide data for a later level.
 - Water: double the sim resolution (96x96) for smoother puddles and shorelines.
 
@@ -19,6 +20,8 @@
 <details>
 <summary>Recently Done</summary>
 
+- Milestone 4 start: Level 2 Septic season. Septic drainfields fail when the water table is within 9 in, sewage surfaces and spreads with the water, Sewer tool connects a row to a lift station, floodwater leaking into manholes can overload it.
+- Area view: light watershed tint over the real map, striped 'if nothing drained' bathtub surface, labels kept on screen.
 - Decluttered mobile UI: compact header, one swipeable tool row, Play bar, everything else in a More sheet, small zoom buttons, slim hint strip.
 - Tutorial points at the exact button (pulsing ring and Tap here marker) and shows glowing rings for drain spots.
 - Storm atmosphere (darker sky, dimmer sun, lightning and thunder), wet glossy ground, water shader rebuilt (flow-direction ripples, rain rings, foam, mirror-like shallow sheets), raindrop splashes, drain swirls, animated sea.

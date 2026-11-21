@@ -41,10 +41,12 @@ export function buildLevel1(): LevelData {
       const cells = [hy * N + hx, hy * N + hx + 1, (hy + 1) * N + hx, (hy + 1) * N + hx + 1];
       let mx = -99, mn = 99;
       for (const c of cells) { mx = Math.max(mx, elev[c]); mn = Math.min(mn, elev[c]); surface[c] = S.House; }
-      houses.push({ cells, floor: mx + 0.4, ground: mn, depth: 0, maxDepth: 0 });
+      const septic = hy * N + (hx === 14 ? hx - 1 : hx + 2);
+      const manhole = hy * N + (hx === 14 ? 19 : hx === 24 ? 21 : 28);
+      houses.push({ cells, floor: mx + 0.4, ground: mn, depth: 0, maxDepth: 0, septic, manhole, sewer: false, septicFail: false });
     }
   }
-  return { n: N, elev, surface, open, houses, outfallElev: 1.2 };
+  return { n: N, elev, surface, open, houses, outfallElev: 1.2, liftCell: 26 * N + 22 };
 }
 
 export interface Scenario {
@@ -56,6 +58,7 @@ export interface Scenario {
   tide: (t: number) => number; // ft
   gwOffset: number;
   fact: string; // real Volusia County context shown after the storm
+  septic?: boolean; // Level 2: houses start on septic tanks
 }
 
 export const SCENARIOS: Scenario[] = [
@@ -77,5 +80,11 @@ export const SCENARIOS: Scenario[] = [
     concept: 'When the ground is already full, rain cannot soak in, and water rises from below.',
     duration: 240, rain: t => (t < 150 ? 3.5 : 0), tide: () => 1.0, gwOffset: 0.8,
     fact: "Most of Volusia County's roughly 50 inches of yearly rain falls in the wet season, June through October. In 2022 Hurricane Ian dropped over a foot of rain on parts of the county, onto ground that was already soaked.",
+  },
+  {
+    id: 'septic', title: 'Level 2: Septic season', septic: true,
+    concept: 'A septic tank needs dry soil under it. When the water table rises, sewage comes up instead of soaking in.',
+    duration: 240, rain: t => (t < 120 ? 2.5 : 0), tide: () => 1.0, gwOffset: 0.6,
+    fact: 'Florida has more than 2 million septic tanks. Many counties, including Volusia, are paying to move neighborhoods from septic to sewer to protect rivers and lagoons from sewage and the algae blooms it feeds.',
   },
 ];

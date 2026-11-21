@@ -6,14 +6,15 @@ import { liveNote, resultNote } from './ui/feedback.ts';
 import { Tutorial } from './ui/tutorial.ts';
 import { Sound } from './ui/audio.ts';
 
-type Tool = 'inspect' | 'drain' | 'valve' | 'pump' | 'swale' | 'pond' | 'wall' | 'raise' | 'remove';
-interface Frame { t: number; water: Float32Array; vx: Float32Array; vy: Float32Array; tide: number; rain: number }
+type Tool = 'inspect' | 'drain' | 'valve' | 'pump' | 'sewer' | 'swale' | 'pond' | 'wall' | 'raise' | 'remove';
+interface Frame { t: number; water: Float32Array; conc: Float32Array; vx: Float32Array; vy: Float32Array; tide: number; rain: number }
 
 const TIPS: Record<Tool, string> = {
   inspect: 'Inspect: tap any spot to see its height, water and groundwater.',
   drain: 'Storm drain: collects water and pipes it to the outfall in the Halifax River, or to a pond if one is close.',
   valve: 'Check valve: a flap that lets water out but stops the river pushing back in.',
   pump: 'Pump: lifts water into the river, even when the tide is high.',
+  sewer: 'Sewer: tap a house to connect its whole row to the city sewer. Septic tanks retire, but floodwater leaking in can overload the lift station.',
   swale: 'Swale: a shallow grassy strip that holds runoff and lets it soak in. Best beside a road, in lighter storms.',
   pond: 'Retention pond: stores water. Drains within 12 tiles pipe into it, and it empties to the river when the tide allows.',
   wall: 'Wall: a 1 ft wall that blocks water. The water still goes somewhere, often next door.',
@@ -55,6 +56,7 @@ function startScenario(s: Scenario) {
   exitReplay();
   scenario = s;
   sim.gwOffset = s.gwOffset;
+  sim.septicOn = !!s.septic;
   sim.tide = s.tide(0);
   sim.rain = s.rain(0);
   sim.reset();
@@ -64,6 +66,7 @@ function startScenario(s: Scenario) {
   $('mode').textContent = s.title;
   $('concept').textContent = s.concept;
   if (world.lens === 'groundwater') world.paintColors();
+  world.rebuildProps();
   updatePlay();
 }
 
@@ -74,7 +77,7 @@ function freePlay() {
 function record() {
   const vx = new Float32Array(N * N), vy = new Float32Array(N * N);
   sim.computeFlow(vx, vy);
-  frames.push({ t: sim.time, water: sim.water.slice(), vx, vy, tide: sim.tide, rain: sim.rain });
+  frames.push({ t: sim.time, water: sim.water.slice(), conc: sim.conc.slice(), vx, vy, tide: sim.tide, rain: sim.rain });
 }
 
 const STAR_KEY = 'hw-stars';
@@ -88,7 +91,9 @@ function finish() {
   updatePlay();
   const s = scenario!;
   const w = sim.stats.worst * 12;
-  const st = starsFor(w);
+  let st = starsFor(w);
+  if (s.septic && sim.stats.septicFails > 0) st = Math.min(st, 1);
+  if (s.septic && sim.stats.overflow > 0.01) st = Math.min(st, 2);
   const best = loadStars();
   best[s.id] = Math.max(best[s.id] ?? 0, st);
   saveStars(best);
@@ -102,7 +107,8 @@ function finish() {
     <div class="grade ${w > 0 ? 'bad' : 'good'}">${w > 0 ? `${w.toFixed(1)} in of water inside the worst house` : 'All floors dry'}</div>
     <p>${note}</p>
     <p class="fact"><b>Did you know?</b> ${s.fact}</p>
-    ${!next && st >= 1 ? `<div class="complete">Level 1 complete: ${total} of ${SCENARIOS.length * 3} stars. Halifax Shores made it through heavy rain, a king tide and the wet season.</div>` : ''}
+    ${s.id === 'storm3' && st >= 1 ? `<div class="complete">Level 1 complete: ${SCENARIOS.slice(0, 3).reduce((a, x) => a + (best[x.id] ?? 0), 0)} of 9 stars. Halifax Shores made it through heavy rain, a king tide and the wet season. Next up: sewage.</div>` : ''}
+    ${s.id === 'septic' && st >= 1 ? `<div class="complete">Level 2 complete. Total: ${total} of ${SCENARIOS.length * 3} stars.</div>` : ''}
     <div class="row">
       <button id="watch" class="${w > 0 ? 'primary' : ''}">Watch replay</button>
       <button id="retry">Retry</button>
@@ -233,6 +239,15 @@ function applyTool(cx: number, cy: number) {
     say(`${SURFACE_NAMES[surf]}. Ground ${sim.elev[i].toFixed(2)} ft, water ${(sim.water[i] * 12).toFixed(1)} in, water table ${sim.gw[i].toFixed(2)} ft (${Math.max(0, (sim.elev[i] - sim.gw[i]) * 12).toFixed(0)} in below ground).${world.watershed.fill[i] > 0 ? ` If nothing drained, water would pool ${(world.watershed.fill[i] * 12).toFixed(0)} in deep here.` : ''}`);
     return;
   }
+  if (tool === 'sewer') {
+    if (!sim.septicOn) { say('No septic tanks in this storm. Open More and pick Level 2: Septic season.'); return; }
+    const h = sim.houseAt(i);
+    if (h < 0) { say('Tap a house to connect its row to the sewer.'); return; }
+    const k = sim.connectSewer(h);
+    say(k ? `Connected ${k} homes to the sewer. Their septic tanks are retired.` : 'This row is already on sewer.');
+    world.rebuildProps();
+    return;
+  }
   if (tool === 'swale' || tool === 'pond' || tool === 'wall' || tool === 'raise') { earthwork(i, tool); return; }
   const dr = sim.drainAt(i), pm = sim.pumpAt(i);
   if (tool === 'remove') {
@@ -280,12 +295,12 @@ function frame(now: number) {
       $<HTMLInputElement>('rpSlider').value = String(replay.k);
     }
     const f = frames[replay.k];
-    view = { water: f.water, vx: f.vx, vy: f.vy, tide: f.tide, rain: f.rain, live: false };
+    view = { water: f.water, conc: f.conc, vx: f.vx, vy: f.vy, tide: f.tide, rain: f.rain, live: false };
     $('rpTime').textContent = `${Math.floor(f.t / 60)}h ${String(Math.floor(f.t % 60)).padStart(2, '0')}m  tide ${f.tide.toFixed(1)} ft`;
     $('note').textContent = `Replay. ${replay.note}`;
   } else {
     sim.computeFlow(liveVx, liveVy);
-    view = { water: sim.water, vx: liveVx, vy: liveVy, tide: sim.tide, rain: sim.rain, live: true };
+    view = { water: sim.water, conc: sim.conc, vx: liveVx, vy: liveVy, tide: sim.tide, rain: sim.rain, live: true };
     $('note').textContent = now < toastUntil ? toast : liveNote(sim);
   }
   if (scenario) { rainIn.value = String(sim.rain); tideIn.value = String(sim.tide); }
@@ -293,7 +308,8 @@ function frame(now: number) {
   $('tideV').textContent = `${sim.tide.toFixed(1)} ft`;
   const hrs = Math.floor(sim.time / 60), mins = Math.floor(sim.time % 60);
   const worstNow = Math.max(0, ...sim.houses.map(h => h.depth)) * 12;
-  $('stats').textContent = `${hrs}h ${String(mins).padStart(2, '0')}m   Tide ${sim.tide.toFixed(1)} ft   Worst house ${(sim.stats.worst * 12).toFixed(1)} in${worstNow > 0 ? ' (flooding now)' : ''}`;
+  const sewerTxt = sim.septicOn ? `   Septic failing ${sim.houses.filter(h => h.septicFail).length}${sim.liftLoad > 0.12 ? '   Sewer OVERFLOWING' : ''}` : '';
+  $('stats').textContent = `${hrs}h ${String(mins).padStart(2, '0')}m   Tide ${sim.tide.toFixed(1)} ft   Worst house ${(sim.stats.worst * 12).toFixed(1)} in${worstNow > 0 ? ' (flooding now)' : ''}${sewerTxt}`;
   tutorial.update({ playing, time: sim.time, drains: sim.drains.length, finished: !!scenario && sim.time >= scenario.duration, tool, pause: () => { playing = false; updatePlay(); }, hint: cells => world.setHints(cells), selectTool });
   sound.update(view.rain, view.live ? sim.drains.reduce((a, d) => a + Math.max(0, -d.flow), 0) : 0, view.live && playing && sim.pumps.some(p => p.flow > 0.02));
   world.update(dt, now / 1000, view);

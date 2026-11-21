@@ -16,12 +16,15 @@ export function makeWaterMaterial(sunDir: THREE.Vector3) {
     vertexShader: /* glsl */ `
       attribute float aDepth;
       attribute vec2 aFlow;
+      attribute float aConc;
+      varying float vConc;
       varying float vDepth;
       varying vec2 vFlow;
       varying vec3 vWorld;
       void main() {
         vDepth = aDepth;
         vFlow = aFlow;
+        vConc = aConc;
         vec4 w = modelMatrix * vec4(position, 1.0);
         vWorld = w.xyz;
         gl_Position = projectionMatrix * viewMatrix * w;
@@ -33,6 +36,7 @@ export function makeWaterMaterial(sunDir: THREE.Vector3) {
       uniform vec3 uSun;
       varying float vDepth;
       varying vec2 vFlow;
+      varying float vConc;
       varying vec3 vWorld;
       float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float noise(vec2 p) {
@@ -89,7 +93,8 @@ export function makeWaterMaterial(sunDir: THREE.Vector3) {
         vec3 col = mix(tea, mid, smoothstep(0.15, 1.2, vDepth));
         col = mix(col, deep, sqrt(d));
         col *= 1.0 - 0.35 * uDark;
-        col = mix(col, sky, clamp(fres, 0.0, 0.85));
+        col = mix(col, vec3(0.33, 0.27, 0.09), clamp(vConc * 1.6, 0.0, 0.92)); // sewage
+        col = mix(col, sky, clamp(fres * (1.0 - 0.6 * clamp(vConc * 2.0, 0.0, 1.0)), 0.0, 0.85));
         vec3 H = normalize(uSun + V);
         col += vec3(1.0, 0.95, 0.85) * pow(max(dot(n, H), 0.0), 90.0) * 1.3 * (1.0 - 0.85 * uDark);
 

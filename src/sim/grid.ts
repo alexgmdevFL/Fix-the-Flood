@@ -17,7 +17,16 @@ export interface Drain { i: number; valve: boolean; flow: number; to?: number } 
 export const POND_REACH = 12; // a drain pipes into a pond within this many tiles
 const POND_OUT = 0.08; // ft per minute each pond cell can release through its outlet
 export interface Pump { i: number; flow: number }
-export interface House { cells: number[]; floor: number; ground: number; depth: number; maxDepth: number }
+export interface House {
+  cells: number[]; floor: number; ground: number; depth: number; maxDepth: number;
+  septic: number; // drainfield cell in the back yard
+  manhole: number; // street cell where its sewer lateral meets the main
+  sewer: boolean; // connected to central sewer (septic retired)
+  septicFail: boolean;
+}
+export const SEPTIC_SEP = 0.75; // ft of dry soil a drainfield needs above the water table
+export const LIFT_CAP = 0.12; // lift station capacity, ft*cell per minute
+export const GAL_PER_CELL_FT = 6700; // one tile is about 30 x 30 ft
 
 export interface LevelData {
   n: number;
@@ -26,9 +35,10 @@ export interface LevelData {
   open: Uint8Array; // 1 = bay or ocean cell, level held at tide
   houses: House[];
   outfallElev: number;
+  liftCell: number;
 }
 
-export interface Stats { backflow: number; drained: number; pumped: number; blockedMin: number; worst: number; emerged: number }
+export interface Stats { backflow: number; drained: number; pumped: number; blockedMin: number; worst: number; emerged: number; sewage: number; overflow: number; septicFails: number }
 
 export class Sim {
   n: number;
@@ -38,17 +48,22 @@ export class Sim {
   surface0: Uint8Array;
   open: Uint8Array;
   water: Float32Array;
+  conc: Float32Array; // sewage fraction of the water in each cell, 0..1
+  private concN: Float32Array;
   gw: Float32Array;
   fR: Float32Array; fL: Float32Array; fU: Float32Array; fD: Float32Array;
   houses: House[];
   drains: Drain[] = [];
   pumps: Pump[] = [];
   outfallElev: number;
+  liftCell: number;
+  septicOn = false; // Level 2: houses on septic tanks
+  liftLoad = 0; // current sewer flow into the lift station, ft*cell per minute
   rain = 0; // in/hr
   tide = 1; // ft
   gwOffset = 0; // wet season raises this
   time = 0; // minutes
-  stats: Stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0, emerged: 0 };
+  stats: Stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0, emerged: 0, sewage: 0, overflow: 0, septicFails: 0 };
 
   constructor(l: LevelData) {
     this.n = l.n;
@@ -59,8 +74,11 @@ export class Sim {
     this.open = l.open;
     this.houses = l.houses;
     this.outfallElev = l.outfallElev;
+    this.liftCell = l.liftCell;
     const N = l.n * l.n;
     this.water = new Float32Array(N);
+    this.conc = new Float32Array(N);
+    this.concN = new Float32Array(N);
     this.gw = new Float32Array(N);
     this.fR = new Float32Array(N); this.fL = new Float32Array(N);
     this.fU = new Float32Array(N); this.fD = new Float32Array(N);
@@ -71,6 +89,8 @@ export class Sim {
 
   reset() {
     this.water.fill(0);
+    this.conc.fill(0);
+    this.liftLoad = 0;
     this.fR.fill(0); this.fL.fill(0); this.fU.fill(0); this.fD.fill(0);
     const b = this.gwBase();
     for (let i = 0; i < this.gw.length; i++) {
@@ -79,11 +99,51 @@ export class Sim {
       if (b >= this.elev[i]) { this.gw[i] = this.elev[i]; this.water[i] = b - this.elev[i]; } else this.gw[i] = b;
     }
     this.time = 0;
-    this.stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0, emerged: 0 };
-    for (const h of this.houses) { h.depth = 0; h.maxDepth = 0; }
+    this.stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0, emerged: 0, sewage: 0, overflow: 0, septicFails: 0 };
+    for (const h of this.houses) { h.depth = 0; h.maxDepth = 0; h.septicFail = false; }
     for (const d of this.drains) d.flow = 0;
     for (const p of this.pumps) p.flow = 0;
   }
+
+  private addSewage(i: number, v: number) {
+    const m = this.water[i] * this.conc[i] + v;
+    this.water[i] += v;
+    this.conc[i] = Math.min(1, m / this.water[i]);
+    this.stats.sewage += v;
+  }
+
+  /** Septic drainfields fail when the soil under them is wet; sewers overflow when floodwater gets in. */
+  private sewage(dt: number) {
+    const { water, gw, elev } = this;
+    let load = 0;
+    for (const h of this.houses) {
+      if (h.sewer) {
+        h.septicFail = false;
+        load += 0.003 * dt;
+        const m = h.manhole;
+        if (water[m] > 0.1) { const q = Math.min(water[m] - 0.1, 0.006 * dt); water[m] -= q; load += q; } // inflow through the lid
+        continue;
+      }
+      const c = h.septic;
+      const fail = water[c] > 0.05 || gw[c] > elev[c] - SEPTIC_SEP;
+      if (fail && !h.septicFail) this.stats.septicFails++;
+      h.septicFail = fail;
+      if (fail) this.addSewage(c, 0.002 * dt);
+    }
+    this.liftLoad = load / dt;
+    const cap = LIFT_CAP * dt;
+    if (load > cap) { this.addSewage(this.liftCell, load - cap); this.stats.overflow += load - cap; }
+  }
+
+  /** Connect every house in the same row (same street side) to the sewer. Returns how many changed. */
+  connectSewer(house: number) {
+    const col = this.houses[house].cells[0] % this.n;
+    let k = 0;
+    for (const h of this.houses) if (h.cells[0] % this.n === col && !h.sewer) { h.sewer = true; h.septicFail = false; k++; }
+    return k;
+  }
+
+  houseAt(i: number) { return this.houses.findIndex(h => h.cells.includes(i)); }
 
   /** Reshape a cell. Returns '' when done, otherwise a reason it was refused. */
   modify(i: number, kind: Earthwork): string {
@@ -168,17 +228,23 @@ export class Sim {
         fR[i] = r; fL[i] = l; fD[i] = d; fU[i] = u;
       }
     }
+    // Move water, and carry sewage with it (mass = water * concentration)
+    const conc = this.conc, cN = this.concN;
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) {
         const i = y * n + x;
-        let w = water[i] - fR[i] - fL[i] - fD[i] - fU[i];
-        if (x > 0) w += fR[i - 1];
-        if (x < n - 1) w += fL[i + 1];
-        if (y > 0) w += fD[i - n];
-        if (y < n - 1) w += fU[i + n];
+        const out = fR[i] + fL[i] + fD[i] + fU[i];
+        let w = water[i] - out;
+        let mass = (water[i] - out) * conc[i];
+        if (x > 0) { w += fR[i - 1]; mass += fR[i - 1] * conc[i - 1]; }
+        if (x < n - 1) { w += fL[i + 1]; mass += fL[i + 1] * conc[i + 1]; }
+        if (y > 0) { w += fD[i - n]; mass += fD[i - n] * conc[i - n]; }
+        if (y < n - 1) { w += fU[i + n]; mass += fU[i + n] * conc[i + n]; }
         water[i] = Math.max(0, w);
+        cN[i] = water[i] > 1e-5 && !open[i] ? Math.min(1, Math.max(0, mass / water[i])) : 0;
       }
     }
+    this.conc = cN; this.concN = conc;
 
     // Drains: pipe to the bay outfall. The outlet level is the outfall or the tide, whichever is higher.
     const outlet = Math.max(this.outfallElev, this.tide);
@@ -213,6 +279,8 @@ export class Sim {
       p.flow = q / dt;
       this.stats.pumped += q;
     }
+
+    if (this.septicOn) this.sewage(dt);
 
     // Houses: depth of water above the floor
     for (const hs of this.houses) {

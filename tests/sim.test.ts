@@ -47,3 +47,16 @@ test('watershed: the street sits in a bowl behind the seawall', () => {
   const w = computeWatershed(new Sim(buildLevel1()));
   assert.ok(w.fill[23 * N + 19] > 1);
 });
+
+function runSeptic(setup: (s: Sim) => void = () => {}) {
+  const s = new Sim(buildLevel1());
+  setup(s);
+  const sc = SCENARIOS[3];
+  s.septicOn = true; s.gwOffset = sc.gwOffset; s.tide = sc.tide(0); s.reset();
+  while (s.time < sc.duration) { s.rain = sc.rain(s.time); s.tide = sc.tide(s.time); s.step(0.25); }
+  return s;
+}
+const sewerAll = (s: Sim) => { s.connectSewer(0); s.connectSewer(8); s.connectSewer(16); };
+test('level 2: septic tanks fail in the wet season', () => { assert.ok(runSeptic().stats.septicFails > 0); });
+test('level 2: sewer alone overflows when the street floods', () => { const s = runSeptic(sewerAll); assert.equal(s.stats.septicFails, 0); assert.ok(s.stats.overflow > 0); });
+test('level 2: sewer plus drains and pumps keeps sewage out', () => { const s = runSeptic(x => { sewerAll(x); six(x); two(x); }); assert.equal(s.stats.sewage, 0); assert.equal(s.stats.worst, 0); });
