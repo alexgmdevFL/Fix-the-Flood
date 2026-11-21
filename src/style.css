@@ -2,10 +2,11 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd8ea; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 16px; color: #14222c; -webkit-tap-highlight-color: transparent; }
 #app canvas { display: block; touch-action: none; }
-.hud { position: fixed; pointer-events: none; }
+.hud { position: fixed; pointer-events: none; z-index: 2; }
 .hud > * { pointer-events: auto; }
 #top { top: 0; left: 0; right: 0; padding: calc(12px + env(safe-area-inset-top)) 16px 20px; background: linear-gradient(#ffffffe6 70%, #ffffff00); }
 #top h1 { margin: 0; font-size: 22px; letter-spacing: 0.01em; }
+#top h1 small { font-size: 14px; font-weight: 500; opacity: 0.75; margin-left: 6px; }
 #mode { font-weight: 700; font-size: 17px; margin-top: 2px; }
 #concept { font-size: 15px; margin-top: 2px; }
 #stats { font-size: 15px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; white-space: pre-wrap; }
@@ -21,7 +22,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd8ea; fon
 button { font: inherit; font-size: 16px; font-weight: 600; min-height: 46px; border: 1px solid #0003; background: #fff; border-radius: 11px; padding: 10px 14px; cursor: pointer; color: inherit; }
 button:active { transform: scale(0.97); }
 button.on, button.primary { background: #145a7a; color: #fff; border-color: #145a7a; }
-#tools { bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; max-width: 900px; margin: 0 auto; padding: 16px 16px calc(var(--badge) + env(safe-area-inset-bottom)); }
+#tools { bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 8px; max-width: 1000px; margin: 0 auto; padding: 16px 16px calc(var(--badge) + env(safe-area-inset-bottom)); }
 #tools button { min-height: 56px; padding: 6px 4px; font-size: 16px; line-height: 1.15; box-shadow: 0 3px 10px #0003; }
 #modal { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100% - 32px)); background: #fff; border-radius: 16px; padding: 20px; font-size: 17px; line-height: 1.4; box-shadow: 0 10px 40px #0005; }
 #modal h2 { margin: 0 0 10px; font-size: 22px; }
@@ -35,7 +36,15 @@ button.on, button.primary { background: #145a7a; color: #fff; border-color: #145
 #panel select { display: block; width: 100%; font: inherit; font-size: 16px; min-height: 44px; margin-top: 4px; border-radius: 10px; border: 1px solid #0003; padding: 0 10px; background: #fff; }
 #zoom { left: 16px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 8px; }
 #zoom button { min-height: 44px; width: 112px; font-size: 15px; padding: 6px 8px; box-shadow: 0 3px 10px #0003; }
-.maplabel { position: fixed; left: 0; top: 0; pointer-events: none; font-size: 15px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px #000c, 0 0 8px #0008; white-space: nowrap; letter-spacing: 0.02em; display: none; }
+.maplabel { position: fixed; left: 0; top: 0; z-index: 1; pointer-events: none; font-size: 15px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px #000c, 0 0 8px #0008; white-space: nowrap; letter-spacing: 0.02em; display: none; }
+#modal .stars { font-size: 32px; color: #e8a317; letter-spacing: 4px; line-height: 1.1; margin-bottom: 4px; }
+#modal .fact { background: #eaf4f8; border-radius: 10px; padding: 10px 12px; font-size: 15px; }
+#modal .complete { background: #e6f4ea; color: #1b5e33; border-radius: 10px; padding: 10px 12px; font-weight: 700; margin-bottom: 10px; }
+#tut { left: 16px; right: 16px; top: calc(150px + env(safe-area-inset-top)); max-width: 520px; margin: 0 auto; background: #fff; border: 3px solid #145a7a; border-radius: 16px; padding: 14px 16px; font-size: 17px; line-height: 1.4; box-shadow: 0 8px 30px #0004; }
+#tut p { margin: 4px 0 10px; }
+#tut .tstep { font-size: 13px; font-weight: 700; color: #145a7a; text-transform: uppercase; letter-spacing: 0.05em; }
+#tut .row { display: flex; gap: 8px; flex-wrap: wrap; }
+body.tutorial #note, body.tutorial #zoom { display: none; }
 .hidden { display: none !important; }
 @media (max-width: 640px) {
   #top h1 { font-size: 20px; }
@@ -43,7 +52,11 @@ button.on, button.primary { background: #145a7a; color: #fff; border-color: #145
   #replay { bottom: calc(var(--badge) + 146px + env(safe-area-inset-bottom)); }
   #panel { top: auto; bottom: calc(var(--badge) + 146px + env(safe-area-inset-bottom)); left: 16px; right: 16px; width: auto; }
   #panel:not(.collapsed) ~ #note { display: none; }
-  #tools { gap: 6px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  #tools { gap: 5px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  #tools button { font-size: 14px; }
+  #top h1 small { display: block; margin: 0; }
+  #tut { font-size: 15px; padding: 10px 12px; top: calc(140px + env(safe-area-inset-top)); }
+  #tut button { min-height: 40px; padding: 6px 12px; }
   #zoom { top: calc(165px + env(safe-area-inset-top)); transform: none; gap: 6px; }
   #zoom button { width: 98px; min-height: 40px; font-size: 14px; }
   #tools button { min-height: 52px; }

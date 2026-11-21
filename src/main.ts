@@ -3,30 +3,35 @@ import { Sim, S, SURFACE_NAMES, type Earthwork } from './sim/grid.ts';
 import { buildLevel1, SCENARIOS, N, type Scenario } from './levels/level1.ts';
 import { World, type Lens, type View, type Zoom } from './render/world.ts';
 import { liveNote, resultNote } from './ui/feedback.ts';
+import { Tutorial } from './ui/tutorial.ts';
+import { Sound } from './ui/audio.ts';
 
-type Tool = 'inspect' | 'drain' | 'valve' | 'pump' | 'swale' | 'pond' | 'raise' | 'remove';
+type Tool = 'inspect' | 'drain' | 'valve' | 'pump' | 'swale' | 'pond' | 'wall' | 'raise' | 'remove';
 interface Frame { t: number; water: Float32Array; vx: Float32Array; vy: Float32Array; tide: number; rain: number }
 
 const TIPS: Record<Tool, string> = {
   inspect: 'Inspect: tap any spot to see its height, water and groundwater.',
-  drain: 'Storm drain: collects water and pipes it to the outfall in the bay.',
-  valve: 'Check valve: a flap that lets water out but stops the bay pushing back in.',
-  pump: 'Pump: lifts water into the bay, even when the tide is high.',
+  drain: 'Storm drain: collects water and pipes it to the outfall in the Halifax River, or to a pond if one is close.',
+  valve: 'Check valve: a flap that lets water out but stops the river pushing back in.',
+  pump: 'Pump: lifts water into the river, even when the tide is high.',
   swale: 'Swale: a shallow grassy strip that holds runoff and lets it soak in. Best beside a road, in lighter storms.',
-  pond: 'Retention pond: a basin that stores water until it soaks away. Only works if water can flow into it.',
+  pond: 'Retention pond: stores water. Drains within 12 tiles pipe into it, and it empties to the river when the tide allows.',
+  wall: 'Wall: a 1 ft wall that blocks water. The water still goes somewhere, often next door.',
   raise: 'Raise road: lifts a road tile 6 inches. Tap again for a full foot.',
-  remove: 'Remove: tap to undo a drain, pump, swale, pond or raised road.',
+  remove: 'Remove: tap to undo a drain, pump, swale, pond, wall or raised road.',
 };
 const LENS_TIPS: Partial<Record<Lens, string>> = {
   elevation: 'Elevation: blue is low ground, brown is high. Lines mark every half foot.',
   groundwater: 'Groundwater: blue means the soil is full and rain cannot soak in. Tan means room to absorb.',
   flow: 'Flow arrows: which way water is moving right now.',
-  tide: 'High tide: red ground sits below the current tide. Only the seawall and check valves keep the bay out.',
-  watershed: 'Watershed: orange land drains toward the bay, green toward the ocean. Blue is the bowl behind the seawall where water pools if nothing drains it.',
+  tide: 'High tide: red ground sits below the current tide. Only the seawall and check valves keep the river out.',
+  watershed: 'Watershed: orange land drains toward the Halifax River, green toward the ocean. Blue is the bowl behind the seawall where water pools if nothing drains it.',
   pipes: 'Pipes: underground drain lines to the outfall. Cyan is flowing out, red is running backward.',
 };
 
 const sim = new Sim(buildLevel1());
+const sound = new Sound();
+const tutorial = new Tutorial(document.getElementById('tut')!);
 const world = new World(document.getElementById('app')!, sim);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -71,27 +76,42 @@ function record() {
   frames.push({ t: sim.time, water: sim.water.slice(), vx, vy, tide: sim.tide, rain: sim.rain });
 }
 
+const STAR_KEY = 'hw-stars';
+function loadStars(): Record<string, number> { try { return JSON.parse(localStorage.getItem(STAR_KEY) || '{}'); } catch { return {}; } }
+function saveStars(v: Record<string, number>) { try { localStorage.setItem(STAR_KEY, JSON.stringify(v)); } catch { /* private mode */ } }
+const starsFor = (inches: number) => (inches <= 0 ? 3 : inches < 1 ? 2 : inches < 3 ? 1 : 0);
+const starStr = (k: number) => '\u2605'.repeat(k) + '\u2606'.repeat(3 - k);
+
 function finish() {
   playing = false;
   updatePlay();
   const s = scenario!;
   const w = sim.stats.worst * 12;
+  const st = starsFor(w);
+  const best = loadStars();
+  best[s.id] = Math.max(best[s.id] ?? 0, st);
+  saveStars(best);
   const next = SCENARIOS[SCENARIOS.indexOf(s) + 1];
+  const total = SCENARIOS.reduce((a, x) => a + (best[x.id] ?? 0), 0);
   const note = resultNote(sim);
+  const canNext = next && st >= 1;
   $('modal').innerHTML = `
     <h2>${s.title}</h2>
+    <div class="stars" aria-label="${st} of 3 stars">${starStr(st)}</div>
     <div class="grade ${w > 0 ? 'bad' : 'good'}">${w > 0 ? `${w.toFixed(1)} in of water inside the worst house` : 'All floors dry'}</div>
     <p>${note}</p>
+    <p class="fact"><b>Did you know?</b> ${s.fact}</p>
+    ${!next && st >= 1 ? `<div class="complete">Level 1 complete: ${total} of ${SCENARIOS.length * 3} stars. Halifax Shores made it through heavy rain, a king tide and the wet season.</div>` : ''}
     <div class="row">
       <button id="watch" class="${w > 0 ? 'primary' : ''}">Watch replay</button>
       <button id="retry">Retry</button>
-      ${w <= 0 && next ? '<button id="next" class="primary">Next storm</button>' : ''}
+      ${canNext ? '<button id="next" class="primary">Next storm</button>' : ''}
       <button id="close">Keep building</button>
     </div>`;
   $('modal').classList.remove('hidden');
   $('watch').onclick = () => startReplay(note);
   $('retry').onclick = () => startScenario(s);
-  if (w <= 0 && next) $('next').onclick = () => startScenario(next);
+  if (canNext) $('next').onclick = () => startScenario(next);
   $('close').onclick = () => $('modal').classList.add('hidden');
 }
 
@@ -126,6 +146,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(b => {
     tool = b.dataset.tool as Tool;
     document.querySelectorAll('[data-tool]').forEach(o => o.classList.toggle('on', o === b));
     say(TIPS[tool]);
+    sound.click();
   };
 });
 
@@ -147,7 +168,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach(b => {
     document.querySelectorAll('[data-zoom]').forEach(o => o.classList.toggle('on', o === b));
     if (z === 'watershed') setLens('watershed');
     else if (world.lens === 'watershed') setLens('surface');
-    if (z === 'region') say('Region: your neighborhood is one block on a long, low barrier island between the bay and the ocean.');
+    if (z === 'region') say('Region: Halifax Shores is one block on Volusia County\'s long, low barrier island, between the Halifax River and the Atlantic.');
   };
 });
 const setPanel = (c: boolean) => { $('panel').classList.toggle('collapsed', c); $('panelToggle').textContent = c ? 'More' : 'Hide'; };
@@ -163,6 +184,10 @@ $('rpExit').onclick = exitReplay;
 let down: { x: number; y: number; t: number } | null = null;
 const cv = world.renderer.domElement;
 cv.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+document.addEventListener('pointerdown', () => sound.start());
+const setSoundLabel = () => { $('sound').textContent = sound.muted ? 'Sound: off' : 'Sound: on'; };
+setSoundLabel();
+$('sound').onclick = () => { sound.toggle(); setSoundLabel(); };
 cv.addEventListener('pointerup', e => {
   if (!down) return;
   if (Math.hypot(e.clientX - down.x, e.clientY - down.y) < 8 && performance.now() - down.t < 500) applyTool(e.clientX, e.clientY);
@@ -174,6 +199,7 @@ function footprint(i: number, t: Tool): number[] {
   const add = (cx: number, cy: number) => { if (cx >= 0 && cy >= 0 && cx < N && cy < N) out.push(cy * N + cx); };
   if (t === 'pond' || t === 'remove') { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) add(x + dx, y + dy); }
   else if (t === 'swale') { for (let dy = -2; dy <= 2; dy++) add(x, y + dy); }
+  else if (t === 'wall') { for (let dy = -1; dy <= 1; dy++) add(x, y + dy); }
   else add(x, y);
   return out;
 }
@@ -201,7 +227,7 @@ function applyTool(cx: number, cy: number) {
     say(`${SURFACE_NAMES[surf]}. Ground ${sim.elev[i].toFixed(2)} ft, water ${(sim.water[i] * 12).toFixed(1)} in, water table ${sim.gw[i].toFixed(2)} ft (${Math.max(0, (sim.elev[i] - sim.gw[i]) * 12).toFixed(0)} in below ground).${world.watershed.fill[i] > 0 ? ` If nothing drained, water would pool ${(world.watershed.fill[i] * 12).toFixed(0)} in deep here.` : ''}`);
     return;
   }
-  if (tool === 'swale' || tool === 'pond' || tool === 'raise') { earthwork(i, tool); return; }
+  if (tool === 'swale' || tool === 'pond' || tool === 'wall' || tool === 'raise') { earthwork(i, tool); return; }
   const dr = sim.drainAt(i), pm = sim.pumpAt(i);
   if (tool === 'remove') {
     if (dr) sim.drains.splice(sim.drains.indexOf(dr), 1);
@@ -262,6 +288,8 @@ function frame(now: number) {
   const hrs = Math.floor(sim.time / 60), mins = Math.floor(sim.time % 60);
   const worstNow = Math.max(0, ...sim.houses.map(h => h.depth)) * 12;
   $('stats').textContent = `${hrs}h ${String(mins).padStart(2, '0')}m   Tide ${sim.tide.toFixed(1)} ft   Worst house ${(sim.stats.worst * 12).toFixed(1)} in${worstNow > 0 ? ' (flooding now)' : ''}`;
+  tutorial.update({ playing, time: sim.time, drains: sim.drains.length, finished: !!scenario && sim.time >= scenario.duration, pause: () => { playing = false; updatePlay(); } });
+  sound.update(view.rain, view.live ? sim.drains.reduce((a, d) => a + Math.max(0, -d.flow), 0) : 0, view.live && playing && sim.pumps.some(p => p.flow > 0.02));
   world.update(dt, now / 1000, view);
   requestAnimationFrame(frame);
 }
@@ -271,5 +299,6 @@ startScenario(SCENARIOS[0]);
 playing = false;
 updatePlay();
 say('Storm 1. Press Play to start the rain, then place drains where water collects.');
+if (!Tutorial.done()) tutorial.start();
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');

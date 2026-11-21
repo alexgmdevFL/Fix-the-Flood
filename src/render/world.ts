@@ -244,14 +244,14 @@ export class World {
       document.body.appendChild(el);
       this.labels.push({ el, pos: new THREE.Vector3(gx - n / 2 + 0.5, y, gy - n / 2 + 0.5), min, max });
     };
-    label('Bay', 1, 12, 1, 26);
-    label('Atlantic Ocean', 47, 32, 1, 26);
-    label('Seawall', 6, 36, 3.4 * VS, 26, 110);
-    label('Outfall pipe', 5, OUTFALL_ROW + 1.6, 1.2 * VS, 18, 110);
-    label('Dune', 38.5, 12, 6 * VS, 26, 110);
-    label('Main St', 20, 8, 2.2 * VS, 26, 110);
+    label('Halifax River', 1, 12, 1, 50);
+    label('Atlantic Ocean', 47, 32, 1, 50);
+    label('Seawall', 6, 36, 3.4 * VS, 50, 110);
+    label('Outfall pipe', 5, OUTFALL_ROW + 1.6, 1.2 * VS, 50, 110);
+    label('Dune', 38.5, 12, 6 * VS, 50, 110);
+    label('Main St', 20, 8, 2.2 * VS, 50, 110);
     label('Your neighborhood', 24, -3, 1.5, 90);
-    label('Barrier island', 24, -40, 1, 90);
+    label('Volusia County barrier island', 24, -40, 1, 90);
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -410,6 +410,7 @@ export class World {
           if (inGrid && sim.surface[gi] === S.Swale) c.setRGB(0.72, 0.9, 0.62);
           if (inGrid && sim.surface[gi] === S.Pond) c.setRGB(0.62, 0.55, 0.42);
           if (inGrid && sim.elev[gi] > sim.elev0[gi] + 0.01) c.setRGB(0.82, 0.82, 0.85);
+          if (inGrid && sim.surface[gi] === S.Wall && sim.surface0[gi] !== S.Wall) c.setRGB(0.72, 0.68, 0.62);
         }
         ca.setXYZ(pi, c.r, c.g, c.b);
       }
@@ -575,8 +576,10 @@ export class World {
     if (this.pipes) { this.scene.remove(this.pipes); this.pipes.geometry.dispose(); }
     const segs: [number, number, number, number, number][] = [];
     const ox = 6, oy = OUTFALL_ROW;
+    this.sim.connectDrains();
     this.sim.drains.forEach((d, k) => {
       const x = d.i % this.n, y = Math.floor(d.i / this.n);
+      if ((d.to ?? -1) >= 0) { segs.push([x, y, d.to! % this.n, Math.floor(d.to! / this.n), k]); return; }
       if (y !== oy) segs.push([x, y, x, oy, k]);
       segs.push([x, oy, ox, oy, k]);
     });

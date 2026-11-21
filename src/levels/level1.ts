@@ -1,4 +1,5 @@
-// Level 1: "One Street, One Storm". Fictional barrier-island block. Bay to the west, ocean to the east.
+// Level 1: "One Street, One Storm". Halifax Shores, a fictional block on Volusia County's barrier island.
+// Halifax River (the Intracoastal lagoon) to the west, Atlantic Ocean to the east.
 import { S, type LevelData, type House } from '../sim/grid.ts';
 
 export const N = 48;
@@ -54,23 +55,27 @@ export interface Scenario {
   rain: (t: number) => number; // in/hr
   tide: (t: number) => number; // ft
   gwOffset: number;
+  fact: string; // real Volusia County context shown after the storm
 }
 
 export const SCENARIOS: Scenario[] = [
   {
     id: 'storm1', title: 'Storm 1: Heavy rain',
     concept: 'Water flows downhill. Drains need somewhere to go.',
-    duration: 240, rain: t => (t < 150 ? 4 : 0), tide: () => 1.0, gwOffset: 0,
+    duration: 240, rain: t => (t < 120 ? 3 : 0), tide: () => 1.0, gwOffset: 0,
+    fact: 'Summer thunderstorms in Volusia County can drop 2 to 3 inches of rain in an hour. Streets are built to carry water to drains, which is why they flood first.',
   },
   {
     id: 'storm2', title: 'Storm 2: Rain plus king tide',
-    concept: 'When the bay is higher than the outfall, drains run backward.',
-    duration: 300, rain: t => (t >= 60 && t < 200 ? 3 : 0),
+    concept: 'When the river is higher than the outfall, drains run backward.',
+    duration: 300, rain: t => (t >= 60 && t < 180 ? 2.5 : 0),
     tide: t => 1.0 + 1.9 * Math.max(0, Math.sin(Math.PI * t / 300)), gwOffset: 0,
+    fact: 'King tides along the Volusia coast are highest in the fall, when the sun and moon line up. On those days water can bubble up through street drains with no rain at all.',
   },
   {
     id: 'storm3', title: 'Storm 3: Wet season',
     concept: 'When the ground is already full, rain cannot soak in, and water rises from below.',
-    duration: 270, rain: t => (t < 180 ? 4.5 : 0), tide: () => 1.0, gwOffset: 0.8,
+    duration: 240, rain: t => (t < 150 ? 3.5 : 0), tide: () => 1.0, gwOffset: 0.8,
+    fact: "Most of Volusia County's roughly 50 inches of yearly rain falls in the wet season, June through October. In 2022 Hurricane Ian dropped over a foot of rain on parts of the county, onto ground that was already soaked.",
   },
 ];

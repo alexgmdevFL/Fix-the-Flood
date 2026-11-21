@@ -4,9 +4,9 @@ import type { Sim } from '../sim/grid.ts';
 export function liveNote(sim: Sim): string {
   if (sim.gwOffset > 0 && sim.time < 40) return 'Wet season: the water table is almost at the surface. Low spots and ponds are already filling from below.';
   const backflow = sim.drains.some(d => d.flow < -0.01);
-  if (backflow) return `High tide: the bay (${sim.tide.toFixed(1)} ft) is above the outfall pipe (${sim.outfallElev.toFixed(1)} ft). Your drains are running backward.`;
+  if (backflow) return `High tide: the Halifax River (${sim.tide.toFixed(1)} ft) is above the outfall pipe (${sim.outfallElev.toFixed(1)} ft). Your drains are running backward.`;
   if (sim.tide > sim.outfallElev && sim.drains.some(d => d.valve && sim.water[d.i] > 0.05) && sim.pumps.length === 0)
-    return 'Check valves are holding the bay out, but the outfall is underwater, so rain has nowhere to go.';
+    return 'Check valves are holding the river out, but the outfall is underwater, so rain has nowhere to go.';
   if (sim.houses.some(h => h.depth > 0)) return 'Water is inside homes. Tap a tool, then tap the map to build.';
   if (sim.drains.length === 0 && sim.rain > 0) return 'Rain flows downhill and collects in the low street. Try placing drains where it pools.';
   return '';
@@ -17,7 +17,7 @@ export function resultNote(sim: Sim): string {
   const parts: string[] = [];
   if (s.worst <= 0) parts.push('Every floor stayed dry.');
   else if (s.backflow > 1 && !sim.drains.some(d => d.valve))
-    parts.push('Your drains ran backward. At high tide the bay sat above the outfall pipe, so bay water came up through the street drains. A check valve stops that.');
+    parts.push('Your drains ran backward. At high tide the Halifax River sat above the outfall pipe, so river water came up through the street drains. A check valve stops that.');
   else if (s.blockedMin > 20 && sim.pumps.length === 0)
     parts.push('Check valves stopped the backflow, but with the outfall underwater the rain had nowhere to go. A pump can lift water over the high tide.');
   else if (sim.gwOffset > 0)
@@ -29,6 +29,6 @@ export function resultNote(sim: Sim): string {
   sim.surface.forEach((s, i) => { if (s === 7 && sim.water[i] > 0.25) standing++; });
   if (standing > 0) parts.push('Your ponds still hold standing water. Within a week that is mosquito habitat.');
   if (s.worst > 0 && sim.raisedCells() > 0) parts.push('Raised roads stay drier, but they push water toward the houses beside them.');
-  if (sim.pumps.length > 0) parts.push('Trade-off: every gallon pumped went into the bay, along with whatever was on the street.');
+  if (sim.pumps.length > 0) parts.push('Trade-off: every gallon pumped went into the Halifax River, along with whatever was on the street.');
   return parts.join(' ');
 }

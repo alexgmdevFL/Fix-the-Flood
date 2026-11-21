@@ -2,18 +2,20 @@
 
 export const S = { Water: 0, Sand: 1, Grass: 2, Pavement: 3, House: 4, Wall: 5, Swale: 6, Pond: 7 } as const;
 export const SURFACE_NAMES = ['Open water', 'Sand', 'Grass', 'Pavement', 'House', 'Seawall', 'Swale', 'Retention pond'];
-export type Earthwork = 'swale' | 'pond' | 'raise' | 'restore';
+export type Earthwork = 'swale' | 'pond' | 'raise' | 'wall' | 'restore';
 
 // Infiltration rate by surface, inches per hour
 export const INFIL_IN_HR = [0, 3, 1, 0.05, 0, 0, 2.5, 1.5];
 export const POROSITY = 0.3;
-export const DRAIN_CAP = 0.4; // ft of depth per minute one inlet can pass
+export const DRAIN_CAP = 0.6; // ft of depth per minute one inlet can pass
 export const DRAIN_K = 2.0;
 export const PUMP_CAP = 1.0; // ft per minute
 const C = 0.1; // virtual pipe conductance per tick
 const FRICTION = 0.985;
 
-export interface Drain { i: number; valve: boolean; flow: number } // flow < 0 means backflow
+export interface Drain { i: number; valve: boolean; flow: number; to?: number } // flow < 0 means backflow; to = pond cell it pipes into, or -1 for the river outfall
+export const POND_REACH = 12; // a drain pipes into a pond within this many tiles
+const POND_OUT = 0.08; // ft per minute each pond cell can release through its outlet
 export interface Pump { i: number; flow: number }
 export interface House { cells: number[]; floor: number; ground: number; depth: number; maxDepth: number }
 
@@ -98,10 +100,27 @@ export class Sim {
       this.elev[i] += 0.5;
       return '';
     }
-    if (s0 !== S.Grass && s0 !== S.Sand) return 'Swales and ponds go on open ground, not pavement.';
+    if (s0 !== S.Grass && s0 !== S.Sand) return 'Swales, ponds and walls go on open ground, not pavement.';
+    if (kind === 'wall') { this.elev[i] = this.elev0[i] + 1.0; this.surface[i] = S.Wall; return ''; }
     this.elev[i] = this.elev0[i] - (kind === 'swale' ? 0.4 : 1.2);
     this.surface[i] = kind === 'swale' ? S.Swale : S.Pond;
     return '';
+  }
+
+  /** Each drain pipes into the nearest pond within reach, otherwise to the river outfall. */
+  connectDrains() {
+    const ponds: number[] = [];
+    for (let i = 0; i < this.surface.length; i++) if (this.surface[i] === S.Pond) ponds.push(i);
+    for (const d of this.drains) {
+      let best = -1, bd = POND_REACH;
+      const x = d.i % this.n, y = Math.floor(d.i / this.n);
+      for (const p of ponds) {
+        const dist = Math.hypot((p % this.n) - x, Math.floor(p / this.n) - y);
+        if (dist < bd) { bd = dist; best = p; }
+      }
+      d.to = best;
+    }
+    return ponds;
   }
 
   raisedCells() { let c = 0; for (let i = 0; i < this.elev.length; i++) if (this.elev[i] > this.elev0[i] + 0.01) c++; return c; }
@@ -163,18 +182,28 @@ export class Sim {
 
     // Drains: pipe to the bay outfall. The outlet level is the outfall or the tide, whichever is higher.
     const outlet = Math.max(this.outfallElev, this.tide);
+    const ponds = this.connectDrains();
     for (const dr of this.drains) {
       const h = elev[dr.i] + water[dr.i];
-      let q = DRAIN_K * (h - outlet) * dt;
+      const to = dr.to ?? -1;
+      const out = to >= 0 ? elev[to] + water[to] : outlet;
+      let q = DRAIN_K * (h - out) * dt;
       q = Math.max(-DRAIN_CAP * dt, Math.min(DRAIN_CAP * dt, q));
       if (q < 0 && dr.valve) {
         if (water[dr.i] > 0.02) this.stats.blockedMin += dt;
         q = 0;
       }
       if (q > 0) q = Math.min(q, water[dr.i]);
+      if (q < 0 && to >= 0) q = Math.max(q, -water[to]);
       water[dr.i] -= q;
+      if (to >= 0) water[to] += q;
       dr.flow = q / dt;
       if (q < 0) this.stats.backflow -= q; else this.stats.drained += q;
+    }
+    // Ponds release slowly to the river through a flap-gated outlet, only when above the outfall and the tide
+    for (const p of ponds) {
+      const q = Math.min(POND_OUT * dt, Math.max(0, elev[p] + water[p] - outlet) * 0.5 * dt, water[p]);
+      water[p] -= q;
     }
 
     // Pumps lift water over the tide into the bay
