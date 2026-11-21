@@ -162,8 +162,8 @@ $('play').onclick = () => {
   playing = !playing; updatePlay();
 };
 $('speed').onclick = () => { speed = speed === 1 ? 2 : speed === 2 ? 4 : 1; $('speed').textContent = `${speed}x`; };
-$('reset').onclick = () => { if (scenario) startScenario(scenario); else sim.reset(); };
-SCENARIOS.forEach((s, k) => { $(`s${k + 1}`).onclick = () => startScenario(s); });
+$('reset').onclick = () => { if (scenario) startScenario(scenario); else sim.reset(); setPanel(true); };
+SCENARIOS.forEach((s, k) => { $(`s${k + 1}`).onclick = () => { startScenario(s); setPanel(true); }; });
 const lensSel = $<HTMLSelectElement>('lens');
 function setLens(l: Lens) { world.setLens(l); lensSel.value = l; const tip = LENS_TIPS[l]; if (tip) say(tip); }
 lensSel.onchange = () => setLens(lensSel.value as Lens);
@@ -177,8 +177,8 @@ document.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach(b => {
     if (z === 'region') say('Region: Halifax Shores is one block on Volusia County\'s long, low barrier island, between the Halifax River and the Atlantic.');
   };
 });
-const setPanel = (c: boolean) => { $('panel').classList.toggle('collapsed', c); $('panelToggle').textContent = c ? 'More' : 'Hide'; };
-setPanel(innerWidth < 640);
+const setPanel = (c: boolean) => { $('panel').classList.toggle('collapsed', c); $('panelToggle').textContent = c ? 'More' : 'Close'; };
+setPanel(true);
 $('panelToggle').onclick = () => setPanel(!$('panel').classList.contains('collapsed'));
 rainIn.oninput = () => { exitReplay(); freePlay(); sim.rain = +rainIn.value; playing = true; updatePlay(); };
 tideIn.oninput = () => { exitReplay(); freePlay(); sim.tide = +tideIn.value; playing = true; updatePlay(); };

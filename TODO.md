@@ -19,6 +19,7 @@
 <details>
 <summary>Recently Done</summary>
 
+- Decluttered mobile UI: compact header, one swipeable tool row, Play bar, everything else in a More sheet, small zoom buttons, slim hint strip.
 - Tutorial points at the exact button (pulsing ring and Tap here marker) and shows glowing rings for drain spots.
 - Storm atmosphere (darker sky, dimmer sun, lightning and thunder), wet glossy ground, water shader rebuilt (flow-direction ripples, rain rings, foam, mirror-like shallow sheets), raindrop splashes, drain swirls, animated sea.
 - Live site fixed: Netlify deploys from main; session branch merged.
