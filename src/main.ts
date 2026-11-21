@@ -1,7 +1,7 @@
 import './style.css';
 import { Sim, S, SURFACE_NAMES, type Earthwork } from './sim/grid.ts';
 import { buildLevel1, SCENARIOS, N, type Scenario } from './levels/level1.ts';
-import { World, type Lens, type View } from './render/world.ts';
+import { World, type Lens, type View, type Zoom } from './render/world.ts';
 import { liveNote, resultNote } from './ui/feedback.ts';
 
 type Tool = 'inspect' | 'drain' | 'valve' | 'pump' | 'swale' | 'pond' | 'raise' | 'remove';
@@ -17,8 +17,14 @@ const TIPS: Record<Tool, string> = {
   raise: 'Raise road: lifts a road tile 6 inches. Tap again for a full foot.',
   remove: 'Remove: tap to undo a drain, pump, swale, pond or raised road.',
 };
-const LENSES: Lens[] = ['surface', 'elevation', 'groundwater', 'flow'];
-const LENS_NAMES: Record<Lens, string> = { surface: 'Lens: Normal', elevation: 'Lens: Elevation', groundwater: 'Lens: Groundwater', flow: 'Lens: Flow arrows' };
+const LENS_TIPS: Partial<Record<Lens, string>> = {
+  elevation: 'Elevation: blue is low ground, brown is high. Lines mark every half foot.',
+  groundwater: 'Groundwater: blue means the soil is full and rain cannot soak in. Tan means room to absorb.',
+  flow: 'Flow arrows: which way water is moving right now.',
+  tide: 'High tide: red ground sits below the current tide. Only the seawall and check valves keep the bay out.',
+  watershed: 'Watershed: orange land drains toward the bay, green toward the ocean. Blue is the bowl behind the seawall where water pools if nothing drains it.',
+  pipes: 'Pipes: underground drain lines to the outfall. Cyan is flowing out, red is running backward.',
+};
 
 const sim = new Sim(buildLevel1());
 const world = new World(document.getElementById('app')!, sim);
@@ -131,12 +137,19 @@ $('play').onclick = () => {
 $('speed').onclick = () => { speed = speed === 1 ? 2 : speed === 2 ? 4 : 1; $('speed').textContent = `${speed}x`; };
 $('reset').onclick = () => { if (scenario) startScenario(scenario); else sim.reset(); };
 SCENARIOS.forEach((s, k) => { $(`s${k + 1}`).onclick = () => startScenario(s); });
-$('lens').onclick = () => {
-  world.setLens(LENSES[(LENSES.indexOf(world.lens) + 1) % LENSES.length]);
-  $('lens').textContent = LENS_NAMES[world.lens];
-  if (world.lens === 'groundwater') say('Groundwater: blue means the soil is full and rain cannot soak in. Tan means room to absorb.');
-  if (world.lens === 'flow') say('Flow arrows: which way water is moving right now.');
-};
+const lensSel = $<HTMLSelectElement>('lens');
+function setLens(l: Lens) { world.setLens(l); lensSel.value = l; const tip = LENS_TIPS[l]; if (tip) say(tip); }
+lensSel.onchange = () => setLens(lensSel.value as Lens);
+document.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach(b => {
+  b.onclick = () => {
+    const z = b.dataset.zoom as Zoom;
+    world.flyTo(z);
+    document.querySelectorAll('[data-zoom]').forEach(o => o.classList.toggle('on', o === b));
+    if (z === 'watershed') setLens('watershed');
+    else if (world.lens === 'watershed') setLens('surface');
+    if (z === 'region') say('Region: your neighborhood is one block on a long, low barrier island between the bay and the ocean.');
+  };
+});
 const setPanel = (c: boolean) => { $('panel').classList.toggle('collapsed', c); $('panelToggle').textContent = c ? 'More' : 'Hide'; };
 setPanel(innerWidth < 640);
 $('panelToggle').onclick = () => setPanel(!$('panel').classList.contains('collapsed'));
@@ -185,7 +198,7 @@ function applyTool(cx: number, cy: number) {
   if (i === null) return;
   const surf = sim.surface[i];
   if (tool === 'inspect') {
-    say(`${SURFACE_NAMES[surf]}. Ground ${sim.elev[i].toFixed(2)} ft, water ${(sim.water[i] * 12).toFixed(1)} in, water table ${sim.gw[i].toFixed(2)} ft (${Math.max(0, (sim.elev[i] - sim.gw[i]) * 12).toFixed(0)} in below ground).`);
+    say(`${SURFACE_NAMES[surf]}. Ground ${sim.elev[i].toFixed(2)} ft, water ${(sim.water[i] * 12).toFixed(1)} in, water table ${sim.gw[i].toFixed(2)} ft (${Math.max(0, (sim.elev[i] - sim.gw[i]) * 12).toFixed(0)} in below ground).${world.watershed.fill[i] > 0 ? ` If nothing drained, water would pool ${(world.watershed.fill[i] * 12).toFixed(0)} in deep here.` : ''}`);
     return;
   }
   if (tool === 'swale' || tool === 'pond' || tool === 'raise') { earthwork(i, tool); return; }

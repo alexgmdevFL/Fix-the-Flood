@@ -7,9 +7,14 @@ import { S, type Sim } from '../sim/grid.ts';
 import { OUTFALL_ROW } from '../levels/level1.ts';
 import { makeWaterMaterial } from './water.ts';
 import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.ts';
+import { computeWatershed, type Watershed } from '../sim/watershed.ts';
 
 export const VS = 0.35; // world units per foot of elevation (vertical exaggeration)
-export type Lens = 'surface' | 'elevation' | 'groundwater' | 'flow';
+export type Lens = 'surface' | 'elevation' | 'groundwater' | 'flow' | 'tide' | 'watershed' | 'pipes';
+export type Zoom = 'house' | 'street' | 'watershed' | 'region';
+const MAP_LENSES: Lens[] = ['elevation', 'groundwater', 'tide', 'watershed'];
+// Camera presets: distance and polar angle (0 = straight down)
+const ZOOMS: Record<Zoom, [number, number]> = { house: [6.5, 1.0], street: [40, 0.86], watershed: [64, 0.22], region: [150, 0.5] };
 export interface View { water: Float32Array; vx: Float32Array | null; vy: Float32Array | null; tide: number; rain: number; live: boolean }
 
 // Quality tier: ?q=low or ?q=high forces it, otherwise touch devices with few cores or little memory get low.
@@ -73,6 +78,14 @@ export class World {
   arrows: THREE.InstancedMesh;
   forceArrows = false;
   private gwT = 0;
+  watershed: Watershed;
+  detail: THREE.Object3D[] = [];
+  pipes: THREE.InstancedMesh | null = null;
+  pipeOwner: number[] = []; // drain index, or -1 - pump index
+  labels: { el: HTMLDivElement; pos: THREE.Vector3; min: number; max: number }[] = [];
+  outline: THREE.LineLoop;
+  private tween: { p0: THREE.Vector3; p1: THREE.Vector3; t0: THREE.Vector3; t1: THREE.Vector3; start: number } | null = null;
+  camDist = 40;
 
   constructor(parent: HTMLElement, sim: Sim) {
     this.sim = sim;
@@ -108,7 +121,8 @@ export class World {
     this.controls.enableDamping = true;
     this.controls.maxPolarAngle = 1.38;
     this.controls.minDistance = 4;
-    this.controls.maxDistance = 70;
+    this.controls.maxDistance = 200;
+    this.controls.addEventListener('start', () => { this.tween = null; });
 
     this.scene.add(new THREE.HemisphereLight(0xdcecff, 0x7a6a4a, 0.7));
     const sun = new THREE.DirectionalLight(0xfff0d8, 3.2);
@@ -122,6 +136,7 @@ export class World {
     this.scene.add(sun);
 
     this.layoutHouses();
+    this.watershed = computeWatershed(sim);
 
     // Terrain with scenery padding around the sim grid
     this.pad = padTerrain(sim);
@@ -154,6 +169,24 @@ export class World {
     seaRect(-F, bayEdge, -F, F);
     seaRect(oceanEdge, F, -F, F);
     this.scene.add(this.sea);
+
+    // Rest of the barrier island beyond the scenery border, seen from the region zoom
+    const landMat = new THREE.MeshStandardMaterial({ color: 0x86a866, roughness: 1 });
+    const mid = (bayEdge + oceanEdge) / 2, wide = oceanEdge - bayEdge, edge = m / 2 - 0.5;
+    for (const sgn of [-1, 1]) {
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(wide, F), landMat);
+      p.rotation.x = -Math.PI / 2;
+      p.position.set(mid, 2.3 * VS, sgn * (edge + F / 2 - 0.5));
+      this.scene.add(p);
+    }
+
+    // Outline of the playable neighborhood, shown when zoomed out
+    const h0 = n / 2;
+    this.outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-h0, 0, -h0), new THREE.Vector3(h0, 0, -h0), new THREE.Vector3(h0, 0, h0), new THREE.Vector3(-h0, 0, h0)]),
+      new THREE.LineBasicMaterial({ color: 0xffd34d, depthTest: false, transparent: true }));
+    this.outline.position.y = 3.5 * VS;
+    this.outline.renderOrder = 5;
+    this.scene.add(this.outline);
 
     // Sim water surface
     const wg = new THREE.PlaneGeometry(n - 1, n - 1, n - 1, n - 1);
@@ -202,6 +235,23 @@ export class World {
     this.parts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xe6f2ff, size: 0.12, transparent: true, opacity: 0.9 }));
     this.parts.frustumCulled = false;
     this.scene.add(this.parts);
+
+    // Map labels, shown by zoom distance
+    const label = (text: string, gx: number, gy: number, y: number, min: number, max = 999) => {
+      const el = document.createElement('div');
+      el.className = 'maplabel';
+      el.textContent = text;
+      document.body.appendChild(el);
+      this.labels.push({ el, pos: new THREE.Vector3(gx - n / 2 + 0.5, y, gy - n / 2 + 0.5), min, max });
+    };
+    label('Bay', 1, 12, 1, 26);
+    label('Atlantic Ocean', 47, 32, 1, 26);
+    label('Seawall', 6, 36, 3.4 * VS, 26, 110);
+    label('Outfall pipe', 5, OUTFALL_ROW + 1.6, 1.2 * VS, 18, 110);
+    label('Dune', 38.5, 12, 6 * VS, 26, 110);
+    label('Main St', 20, 8, 2.2 * VS, 26, 110);
+    label('Your neighborhood', 24, -3, 1.5, 90);
+    label('Barrier island', 24, -40, 1, 90);
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -285,7 +335,28 @@ export class World {
   setLens(l: Lens) {
     this.lens = l;
     this.paintColors();
-    this.terrain.material = l === 'elevation' || l === 'groundwater' ? this.lensMat : this.groundMat;
+    this.terrain.material = MAP_LENSES.includes(l) ? this.lensMat : this.groundMat;
+    if (this.pipes) this.pipes.visible = l === 'pipes';
+  }
+
+  /** Fly the camera to a zoom preset. House zoom centers on the house nearest the current view. */
+  flyTo(z: Zoom) {
+    const [dist, polar] = ZOOMS[z];
+    let target = new THREE.Vector3(0, 0.6, 0);
+    if (z === 'house') {
+      const t = this.controls.target;
+      let best = Infinity;
+      for (const s of this.slots) {
+        const p = this.gridToWorld(s.gx, s.gy);
+        const d = p.distanceToSquared(t);
+        if (d < best) { best = d; target = p.add(new THREE.Vector3(0, 0.3, 0)); }
+      }
+    }
+    const off = new THREE.Vector3().subVectors(this.camera.position, this.controls.target);
+    const sph = new THREE.Spherical().setFromVector3(off);
+    sph.radius = dist; sph.phi = polar;
+    const p1 = new THREE.Vector3().setFromSpherical(sph).add(target);
+    this.tween = { p0: this.camera.position.clone(), p1, t0: this.controls.target.clone(), t1: target, start: performance.now() };
   }
 
   /** Writes the terrain color attribute: earthwork tints in surface/flow view, or the active lens ramp. */
@@ -315,6 +386,25 @@ export class World {
             if (room < 0.03) c.setRGB(0.1, 0.45, 1.0);
           }
           c.convertSRGBToLinear();
+        } else if (this.lens === 'tide') {
+          const e = sim.elev[gi];
+          if (sim.open[gi]) c.setRGB(0.1, 0.3, 0.6);
+          else if (e < sim.tide) c.setRGB(0.92, 0.3, 0.25);
+          else if (e < sim.tide + 1) c.setRGB(1.0, 0.72, 0.3);
+          else c.setRGB(0.86, 0.88, 0.84);
+          if (sim.surface[gi] === S.Wall) c.setRGB(0.35, 0.35, 0.38);
+          c.convertSRGBToLinear();
+        } else if (this.lens === 'watershed') {
+          const { fill, basin } = this.watershed;
+          if (sim.open[gi]) c.setRGB(0.12, 0.32, 0.6);
+          else if (fill[gi] > 0) { const t = Math.min(1, fill[gi] / 1.3); c.setRGB(0.6 - 0.45 * t, 0.8 - 0.35 * t, 1.0 - 0.1 * t); }
+          else if (basin[gi] === 1) c.setRGB(0.96, 0.72, 0.45);
+          else c.setRGB(0.5, 0.82, 0.6);
+          const bx = gx < n - 1 ? basin[gi + 1] : basin[gi];
+          if (!sim.open[gi] && bx !== basin[gi] && !sim.open[gi + 1]) c.setRGB(0.25, 0.2, 0.15); // the divide
+          c.convertSRGBToLinear();
+        } else if (this.lens === 'pipes') {
+          c.setRGB(0.3, 0.3, 0.34);
         } else {
           c.setRGB(1, 1, 1);
           if (inGrid && sim.surface[gi] === S.Swale) c.setRGB(0.72, 0.9, 0.62);
@@ -339,6 +429,7 @@ export class World {
     tp.needsUpdate = true;
     this.terrain.geometry.computeVertexNormals();
     this.terrain.geometry.computeBoundingSphere();
+    this.watershed = computeWatershed(this.sim);
     this.paintColors();
     this.rebuildProps();
   }
@@ -378,6 +469,7 @@ export class World {
       im.receiveShadow = true;
       im.computeBoundingSphere();
       out.meshes.push(im);
+      if (!name.startsWith('house')) this.detail.push(im);
       this.scene.add(im);
     });
     return out;
@@ -456,6 +548,7 @@ export class World {
   }
 
   rebuildProps() {
+    this.buildPipes();
     this.props.clear();
     const { drain, check_valve, pump } = this.assets;
     if (!drain || !check_valve || !pump) return;
@@ -477,6 +570,37 @@ export class World {
     }
   }
 
+  /** Underground pipes: drains run along the street to the cross street, then west to the outfall. Pumps push straight west. */
+  private buildPipes() {
+    if (this.pipes) { this.scene.remove(this.pipes); this.pipes.geometry.dispose(); }
+    const segs: [number, number, number, number, number][] = [];
+    const ox = 6, oy = OUTFALL_ROW;
+    this.sim.drains.forEach((d, k) => {
+      const x = d.i % this.n, y = Math.floor(d.i / this.n);
+      if (y !== oy) segs.push([x, y, x, oy, k]);
+      segs.push([x, oy, ox, oy, k]);
+    });
+    this.sim.pumps.forEach((p, k) => { const x = p.i % this.n, y = Math.floor(p.i / this.n); segs.push([x, y, 5, y, -1 - k]); });
+    this.pipeOwner = segs.map(s => s[4]);
+    const g = new THREE.BoxGeometry(1, 0.08, 1);
+    this.pipes = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }), Math.max(1, segs.length));
+    this.pipes.count = segs.length;
+    this.pipes.renderOrder = 4;
+    this.pipes.frustumCulled = false;
+    const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+    segs.forEach(([x0, y0, x1, y1], k) => {
+      const a = this.gridToWorld(x0, y0), b = this.gridToWorld(x1, y1);
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      mid.y = Math.max(a.y, b.y) + 0.05;
+      const len = Math.max(0.2, a.distanceTo(new THREE.Vector3(b.x, a.y, b.z)));
+      q.setFromAxisAngle(up, Math.atan2(b.x - a.x, b.z - a.z));
+      this.pipes!.setMatrixAt(k, mtx.compose(mid, q, new THREE.Vector3(0.26, 1, len + 0.26)));
+      this.pipes!.setColorAt(k, new THREE.Color(0x8fa3b8));
+    });
+    this.pipes.visible = this.lens === 'pipes';
+    this.scene.add(this.pipes);
+  }
+
   // ---------- effects
   private resetDrop(a: Float32Array, k: number, y: number) {
     const x = (Math.random() - 0.5) * 60, z = (Math.random() - 0.5) * 60;
@@ -495,7 +619,44 @@ export class World {
 
   update(dt: number, t: number, v: View) {
     const { sim, n } = this;
+    if (this.tween) {
+      const tw = this.tween;
+      const k = Math.min(1, (performance.now() - tw.start) / 900); // wall clock, so slow devices still finish in 0.9 s
+      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      this.camera.position.lerpVectors(tw.p0, tw.p1, e);
+      this.controls.target.lerpVectors(tw.t0, tw.t1, e);
+      if (k >= 1) this.tween = null;
+    }
     this.controls.update();
+
+    // Level of detail: declutter and label when zoomed out
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    this.camDist = dist;
+    const showDetail = dist < 52;
+    for (const o of this.detail) o.visible = showDetail;
+    this.outline.visible = dist > 45;
+    const fog = this.scene.fog as THREE.Fog;
+    fog.near = 30 + dist * 0.9;
+    fog.far = 90 + dist * 2.2;
+    const half = new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), pv = new THREE.Vector3();
+    for (const lb of this.labels) {
+      const on = dist >= lb.min && dist <= lb.max;
+      if (on) {
+        pv.copy(lb.pos).project(this.camera);
+        const vis = pv.z < 1 && Math.abs(pv.x) < 1.1 && Math.abs(pv.y) < 1.1;
+        lb.el.style.display = vis ? 'block' : 'none';
+        if (vis) lb.el.style.transform = `translate(${half.x + pv.x * half.x}px, ${half.y - pv.y * half.y}px) translate(-50%, -50%)`;
+      } else lb.el.style.display = 'none';
+    }
+    if (this.pipes && this.lens === 'pipes') {
+      const c = new THREE.Color();
+      this.pipeOwner.forEach((o, k) => {
+        const f = o >= 0 ? (sim.drains[o]?.flow ?? 0) : (sim.pumps[-1 - o]?.flow ?? 0);
+        c.setHex(f < -0.01 ? 0xff4433 : f > 0.01 ? 0x3ee0ff : 0x8fa3b8);
+        this.pipes!.setColorAt(k, c);
+      });
+      if (this.pipes.instanceColor) this.pipes.instanceColor.needsUpdate = true;
+    }
     this.waterMat.uniforms.uTime.value = t;
     this.sea.position.y = v.tide * VS - 0.03;
 
@@ -570,7 +731,7 @@ export class World {
       this.arrows.count = c;
       this.arrows.instanceMatrix.needsUpdate = true;
     } else this.arrows.count = 0;
-    if (this.lens === 'groundwater' && (this.gwT += dt) > 0.5) { this.gwT = 0; this.paintColors(); }
+    if ((this.lens === 'groundwater' || this.lens === 'tide') && (this.gwT += dt) > 0.5) { this.gwT = 0; this.paintColors(); }
 
     const pa = this.parts.geometry.attributes.position as THREE.BufferAttribute;
     for (let k = 0; k < this.partData.length; k++) {

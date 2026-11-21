@@ -8,10 +8,9 @@
 - PNG icons (192, 512) for older Android installs.
 
 ## Next
-- Milestone 3: zoom levels (parcel, neighborhood, watershed) with LOD swaps.
+- Milestone 4: second system (sewage or power) and its interactions with water.
 - Ponds and swales only matter in light storms. Consider drains that can pipe into a pond.
 - Seawall tool and its push-water-to-neighbors consequence.
-- Link Netlify to GitHub for automatic deploys (dashboard step).
 
 ## On Ice
 - Supabase (progress, accounts, shared scenarios). Not until a feature needs it.
@@ -20,6 +19,8 @@
 <details>
 <summary>Recently Done</summary>
 
+- Milestone 3: House, Street, Watershed and Region zoom with camera flights, detail hiding and map labels. Watershed (bowl depth, bay vs ocean drainage), High tide and Pipes lenses. `src/sim/watershed.ts`.
+- Netlify linked to GitHub (pushes deploy).
 - Milestone 2: Storm 3 (wet season), swale, pond and raise-road tools, replay with flow arrows, groundwater and flow lenses, mosquito and raised-road consequence notes.
 - Larger UI text and touch targets, tool bar clear of the hosting badge.
 - Netlify project high-water-flood, deployed.

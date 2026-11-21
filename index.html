@@ -24,10 +24,26 @@
       <div class="row"><button id="s1">Storm 1</button><button id="s2">Storm 2</button><button id="s3">Storm 3</button></div>
       <label>Rain <span id="rainV"></span><input id="rain" type="range" min="0" max="6" step="0.1" value="0" /></label>
       <label>Tide <span id="tideV"></span><input id="tide" type="range" min="0" max="3.5" step="0.05" value="1" /></label>
-      <div class="row"><button id="lens">Lens: Normal</button></div>
+      <label>Lens
+        <select id="lens">
+          <option value="surface">Normal</option>
+          <option value="elevation">Elevation</option>
+          <option value="groundwater">Groundwater</option>
+          <option value="flow">Flow arrows</option>
+          <option value="tide">High tide</option>
+          <option value="watershed">Watershed</option>
+          <option value="pipes">Pipes</option>
+        </select>
+      </label>
     </div>
   </div>
   <div id="note" class="hud"></div>
+  <div id="zoom" class="hud">
+    <button data-zoom="house">House</button>
+    <button data-zoom="street" class="on">Street</button>
+    <button data-zoom="watershed">Watershed</button>
+    <button data-zoom="region">Region</button>
+  </div>
   <div id="tools" class="hud">
     <button data-tool="inspect">Inspect</button>
     <button data-tool="drain" class="on">Drain</button>
