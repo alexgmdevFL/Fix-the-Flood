@@ -1,20 +1,33 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { S, type Sim } from '../sim/grid.ts';
 import { OUTFALL_ROW } from '../levels/level1.ts';
 import { makeWaterMaterial } from './water.ts';
+import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.ts';
 
 export const VS = 0.35; // world units per foot of elevation (vertical exaggeration)
 export type Lens = 'surface' | 'elevation';
 
-const SURF_COL = [0xc2b183, 0xe3d3a6, 0x7fa35a, 0x6b6e72, 0xbdb6a8, 0xb0aca2];
-const HOUSE_COLS = [0xf2a48c, 0xa8dcc8, 0xf5e09a, 0xf4f1ea, 0x9cc6e8, 0xe8b4d0];
-const FLOOD_COL = new THREE.Color(0xd9443a);
+const ASSETS = ['house_ranch', 'house_twostory', 'house_modern', 'palm_a', 'palm_b', 'shrub', 'car', 'streetlight', 'drain', 'check_valve', 'pump'] as const;
+type AssetName = (typeof ASSETS)[number];
+const HOUSE_TYPES = ['house_ranch', 'house_twostory', 'house_modern'] as const;
+type HouseType = (typeof HOUSE_TYPES)[number];
+const CAR_SPOT: Record<HouseType, [number, number]> = { house_ranch: [0.42, 1.2], house_twostory: [0.35, 1.25], house_modern: [1.06, -0.05] };
+const HOUSE_COLS = [0xf2b49e, 0xb5e0cf, 0xf6e3a1, 0xf6f3ec, 0xa9cdeb, 0xeec3d8, 0xf3d2b0];
+const CAR_COLS = [0xc8ccd0, 0x23405e, 0xf0f0f0, 0x8a1f1f, 0x2b2b2b, 0x5e7d8a, 0xd9d2c0];
+const FLOOD_COL = new THREE.Color(0xe0503f);
 
 function rng(seed: number) {
   return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
+// Rotate a local offset (x = side, z = front) by a yaw angle
+const rotXZ = (lx: number, lz: number, a: number): [number, number] => [lx * Math.cos(a) + lz * Math.sin(a), -lx * Math.sin(a) + lz * Math.cos(a)];
 
+interface Batch { meshes: THREE.InstancedMesh[]; tinted: THREE.InstancedMesh[] }
+interface Slot { type: HouseType; idx: number; gx: number; gy: number; rot: number; color: THREE.Color; car: boolean }
 interface Particle { v: THREE.Vector3; life: number }
 
 export class World {
@@ -24,12 +37,16 @@ export class World {
   controls: OrbitControls;
   sim: Sim;
   n: number;
+  pad: Padded;
   terrain: THREE.Mesh;
+  groundMat: THREE.MeshStandardMaterial;
+  lensMat: THREE.MeshStandardMaterial;
   water: THREE.Mesh;
   waterMat: THREE.ShaderMaterial;
-  walls!: THREE.InstancedMesh;
-  roofs!: THREE.InstancedMesh;
-  houseCols: THREE.Color[] = [];
+  sea = new THREE.Group();
+  assets: Partial<Record<AssetName, THREE.Object3D>> = {};
+  batches: Partial<Record<HouseType, Batch>> = {};
+  slots: Slot[] = [];
   houseFlooded: boolean[] = [];
   props = new THREE.Group();
   cursor: THREE.Mesh;
@@ -39,17 +56,7 @@ export class World {
   partData: Particle[] = [];
   partHead = 0;
   lens: Lens = 'surface';
-  private geo = {
-    grate: new THREE.BoxGeometry(0.55, 0.05, 0.55),
-    valve: new THREE.TorusGeometry(0.3, 0.06, 6, 16),
-    pump: new THREE.BoxGeometry(0.55, 0.45, 0.55),
-    stack: new THREE.CylinderGeometry(0.08, 0.08, 0.5, 8),
-  };
-  private mat = {
-    grate: new THREE.MeshStandardMaterial({ color: 0x222428, metalness: 0.6, roughness: 0.5 }),
-    valve: new THREE.MeshStandardMaterial({ color: 0xff8a1f, roughness: 0.5 }),
-    pump: new THREE.MeshStandardMaterial({ color: 0xf2c230, roughness: 0.4, metalness: 0.2 }),
-  };
+  outfallPos = new THREE.Vector3();
 
   constructor(parent: HTMLElement, sim: Sim) {
     this.sim = sim;
@@ -58,61 +65,90 @@ export class World {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.75;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     parent.appendChild(this.renderer.domElement);
 
-    const sky = new THREE.Color(0xbfd8ea);
-    this.scene.background = sky;
-    this.scene.fog = new THREE.Fog(sky, 70, 150);
+    // Physical sky, also baked into an environment map for reflections
+    const sunDir = new THREE.Vector3(-30, 24, 12).normalize();
+    const sky = new Sky();
+    sky.scale.setScalar(1500);
+    const su = sky.material.uniforms;
+    su.turbidity.value = 3.5; su.rayleigh.value = 1.3; su.mieCoefficient.value = 0.004; su.mieDirectionalG.value = 0.8;
+    su.sunPosition.value.copy(sunDir);
+    this.scene.add(sky);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(this.scene, 0.02, 0.1, 3000).texture;
+    this.scene.environmentIntensity = 0.7;
+    pmrem.dispose();
+    this.scene.fog = new THREE.Fog(0xc9dbe6, 55, 130);
 
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400);
-    this.camera.position.set(-26, 30, 34);
+    this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 3000);
+    this.camera.position.set(-24, 22, 30);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(0, 0.6, 0);
     this.controls.enableDamping = true;
-    this.controls.maxPolarAngle = 1.35;
-    this.controls.minDistance = 6;
-    this.controls.maxDistance = 90;
+    this.controls.maxPolarAngle = 1.38;
+    this.controls.minDistance = 4;
+    this.controls.maxDistance = 70;
 
-    this.scene.add(new THREE.HemisphereLight(0xe4f0ff, 0x8a7a5a, 0.9));
-    const sun = new THREE.DirectionalLight(0xfff1dc, 2.4);
-    sun.position.set(-20, 35, 14);
+    this.scene.add(new THREE.HemisphereLight(0xdcecff, 0x7a6a4a, 0.7));
+    const sun = new THREE.DirectionalLight(0xfff0d8, 3.2);
+    sun.position.copy(sunDir).multiplyScalar(60);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const sc = sun.shadow.camera;
-    sc.left = -32; sc.right = 32; sc.top = 32; sc.bottom = -32; sc.near = 1; sc.far = 100;
-    sun.shadow.bias = -0.0006;
+    sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30; sc.near = 1; sc.far = 140;
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.02;
     this.scene.add(sun);
 
-    // Terrain: one vertex per cell
-    const tg = new THREE.PlaneGeometry(n - 1, n - 1, n - 1, n - 1);
+    this.layoutHouses();
+
+    // Terrain with scenery padding around the sim grid
+    this.pad = padTerrain(sim);
+    const m = this.pad.m;
+    const tg = new THREE.PlaneGeometry(m - 1, m - 1, m - 1, m - 1);
     tg.rotateX(-Math.PI / 2);
     const tp = tg.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < n * n; i++) tp.setY(i, sim.elev[i] * VS);
+    for (let i = 0; i < m * m; i++) tp.setY(i, this.pad.elev[i] * VS);
     tg.computeVertexNormals();
-    tg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * n * 3), 3));
-    this.terrain = new THREE.Mesh(tg, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92 }));
+    tg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(m * m * 3), 3));
+    this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras()), roughness: 0.95 });
+    this.lensMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
+    this.terrain = new THREE.Mesh(tg, this.groundMat);
     this.terrain.receiveShadow = true;
     this.scene.add(this.terrain);
-    this.paintTerrain();
 
-    // Water surface
-    const wg = tg.clone();
-    wg.deleteAttribute('color');
-    wg.deleteAttribute('normal');
+    // Open sea beyond the grid on the bay and ocean sides
+    const seaMat = new THREE.MeshStandardMaterial({ color: 0x1b5566, roughness: 0.12, metalness: 0.1 });
+    const half = n / 2 - 0.5, F = 400;
+    const seaRect = (x0: number, x1: number, z0: number, z1: number) => {
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), seaMat);
+      p.rotation.x = -Math.PI / 2;
+      p.position.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
+      p.receiveShadow = true;
+      this.sea.add(p);
+    };
+    const bayEdge = 6 - n / 2 + 0.5 - 0.1, oceanEdge = 40 - n / 2 + 0.5;
+    seaRect(-F, -half, -F, F); seaRect(-half, bayEdge, -F, -half); seaRect(-half, bayEdge, half, F);
+    seaRect(half, F, -F, F); seaRect(oceanEdge, half, -F, -half); seaRect(oceanEdge, half, half, F);
+    this.scene.add(this.sea);
+
+    // Sim water surface
+    const wg = new THREE.PlaneGeometry(n - 1, n - 1, n - 1, n - 1);
+    wg.rotateX(-Math.PI / 2);
     (wg.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
     const da = new THREE.BufferAttribute(new Float32Array(n * n), 1);
     da.setUsage(THREE.DynamicDrawUsage);
     wg.setAttribute('aDepth', da);
-    this.waterMat = makeWaterMaterial(sun.position, sky);
+    this.waterMat = makeWaterMaterial(sunDir);
     this.water = new THREE.Mesh(wg, this.waterMat);
     this.water.renderOrder = 1;
     this.water.frustumCulled = false;
     this.scene.add(this.water);
 
-    this.buildHouses();
-    this.buildPalms();
     this.buildOutfall();
     this.scene.add(this.props);
 
@@ -122,37 +158,79 @@ export class World {
     this.cursor.visible = false;
     this.scene.add(this.cursor);
 
-    // Rain streaks
     const rp = new Float32Array(this.rainCount * 6);
     const rg = new THREE.BufferGeometry();
     rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
     for (let k = 0; k < this.rainCount; k++) this.resetDrop(rp, k, Math.random() * 25);
-    this.rain = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({ color: 0xc8d6e4, transparent: true, opacity: 0.45 }));
+    this.rain = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({ color: 0xc8d6e4, transparent: true, opacity: 0.4 }));
     this.rain.frustumCulled = false;
     this.scene.add(this.rain);
 
-    // Splash particles for drain backflow, pumps and outfall discharge
     const MAXP = 500;
     const pg = new THREE.BufferGeometry();
     pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAXP * 3).fill(-100), 3));
     for (let k = 0; k < MAXP; k++) this.partData.push({ v: new THREE.Vector3(), life: 0 });
-    this.parts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xe6f2ff, size: 0.13, transparent: true, opacity: 0.9 }));
+    this.parts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xe6f2ff, size: 0.12, transparent: true, opacity: 0.9 }));
     this.parts.frustumCulled = false;
     this.scene.add(this.parts);
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    this.load().catch(e => console.error('asset load failed', e));
   }
 
-  toWorld(i: number) {
-    const n = this.n;
-    return new THREE.Vector3((i % n) - n / 2 + 0.5, this.sim.elev[i] * VS, Math.floor(i / n) - n / 2 + 0.5);
+  // ---------- layout
+  private layoutHouses() {
+    const r = rng(5);
+    const counts: Record<string, number> = {};
+    this.slots = this.sim.houses.map((h, k) => {
+      let gx = 0, gy = 0;
+      for (const c of h.cells) { gx += c % this.n; gy += Math.floor(c / this.n); }
+      gx /= 4; gy /= 4;
+      const type = HOUSE_TYPES[(k * 7 + Math.floor(k / 3)) % 3];
+      const idx = counts[type] ?? 0;
+      counts[type] = idx + 1;
+      this.houseFlooded.push(false);
+      return { type, idx, gx, gy, rot: gx < 20 ? Math.PI / 2 : -Math.PI / 2, color: new THREE.Color(HOUSE_COLS[(k * 3) % HOUSE_COLS.length]), car: r() > 0.3 };
+    });
   }
+
+  private streetEdge(gx: number) { return gx < 20 ? 18.0 : gx < 27 ? 22.0 : 28.4; }
+
+  private groundExtras(): Rect[] {
+    const out: Rect[] = [];
+    const r = rng(9);
+    for (const s of this.slots) {
+      out.push({ x0: s.gx - 1.05, y0: s.gy - 1.05, x1: s.gx + 1.05, y1: s.gy + 1.05, color: '#b9b3a6' });
+      const [ox, oz] = rotXZ(CAR_SPOT[s.type][0], CAR_SPOT[s.type][1], s.rot);
+      const cx = s.gx + ox, cy = s.gy + oz, e = this.streetEdge(s.gx);
+      out.push({ x0: Math.min(cx - 0.35, e), y0: cy - 0.28, x1: Math.max(cx + 0.35, e), y1: cy + 0.28, color: '#cbc5b8' });
+      if (r() < 0.5) {
+        const [bx, bz] = rotXZ(-0.2, -1.35, s.rot);
+        const px = s.gx + bx, py = s.gy + bz;
+        out.push({ x0: px - 0.5, y0: py - 0.38, x1: px + 0.5, y1: py + 0.38, color: '#e9e5dc' });
+        out.push({ x0: px - 0.38, y0: py - 0.26, x1: px + 0.38, y1: py + 0.26, color: '#46b8d0' });
+      }
+    }
+    return out;
+  }
+
+  // ---------- coordinates
+  gridToWorld(gx: number, gy: number) { return new THREE.Vector3(gx - this.n / 2 + 0.5, this.elevAt(gx, gy) * VS, gy - this.n / 2 + 0.5); }
+
+  elevAt(gx: number, gy: number) {
+    const m = this.pad.m;
+    const x = Math.min(m - 1, Math.max(0, Math.round(gx + PAD))), y = Math.min(m - 1, Math.max(0, Math.round(gy + PAD)));
+    return this.pad.elev[y * m + x];
+  }
+
+  toWorld(i: number) { return this.gridToWorld(i % this.n, Math.floor(i / this.n)); }
 
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
+    this.camera.fov = w < h ? 55 : 42;
     this.camera.updateProjectionMatrix();
   }
 
@@ -171,103 +249,134 @@ export class World {
   showCursor(i: number | null) {
     if (i === null) { this.cursor.visible = false; return; }
     const p = this.toWorld(i);
-    this.cursor.position.set(p.x, p.y + 0.04, p.z);
+    this.cursor.position.set(p.x, p.y + 0.06, p.z);
     this.cursor.visible = true;
   }
 
-  setLens(l: Lens) { this.lens = l; this.paintTerrain(); }
-
-  paintTerrain() {
-    const { sim, n } = this;
-    const ca = this.terrain.geometry.attributes.color as THREE.BufferAttribute;
-    const c = new THREE.Color();
-    const r = rng(7);
-    for (let i = 0; i < n * n; i++) {
-      if (this.lens === 'elevation') {
-        const e = sim.elev[i];
+  setLens(l: Lens) {
+    this.lens = l;
+    if (l === 'elevation') {
+      const { m, elev } = this.pad;
+      const ca = this.terrain.geometry.attributes.color as THREE.BufferAttribute;
+      const c = new THREE.Color();
+      for (let i = 0; i < m * m; i++) {
+        const e = elev[i];
         const t = Math.min(1, Math.max(0, (e - 1.5) / 3));
         c.setHSL(0.62 - 0.55 * t, 0.65, 0.42 + 0.12 * t);
-        if (e > 0 && Math.abs(e - Math.round(e * 2) / 2) < 0.04) c.multiplyScalar(0.7); // half-foot contours
-      } else {
-        c.setHex(SURF_COL[sim.surface[i]]);
-        const j = 0.94 + r() * 0.1;
-        c.multiplyScalar(j);
-        if (sim.surface[i] === S.Water) c.multiplyScalar(Math.max(0.45, 1 + sim.elev[i] * 0.12));
+        if (e > 0 && Math.abs(e - Math.round(e * 2) / 2) < 0.04) c.multiplyScalar(0.7);
+        c.convertSRGBToLinear();
+        ca.setXYZ(i, c.r, c.g, c.b);
       }
-      c.convertSRGBToLinear();
-      ca.setXYZ(i, c.r, c.g, c.b);
+      ca.needsUpdate = true;
     }
-    ca.needsUpdate = true;
+    this.terrain.material = l === 'elevation' ? this.lensMat : this.groundMat;
   }
 
-  private buildHouses() {
-    const hs = this.sim.houses;
-    const wallG = new THREE.BoxGeometry(1, 1, 1);
-    wallG.translate(0, 0.5, 0);
-    const roofG = new THREE.ConeGeometry(1.25, 0.65, 4);
-    roofG.rotateY(Math.PI / 4);
-    roofG.translate(0, 0.325, 0);
-    this.walls = new THREE.InstancedMesh(wallG, new THREE.MeshStandardMaterial({ roughness: 0.8 }), hs.length);
-    this.roofs = new THREE.InstancedMesh(roofG, new THREE.MeshStandardMaterial({ color: 0x8e5a43, roughness: 0.7, flatShading: true }), hs.length);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-    hs.forEach((h, k) => {
-      const ctr = new THREE.Vector3();
-      for (const ci of h.cells) ctr.add(this.toWorld(ci));
-      ctr.multiplyScalar(0.25);
-      const y0 = h.ground * VS - 0.05;
-      const top = h.floor * VS + 0.9;
-      p.set(ctr.x, y0, ctr.z); s.set(1.6, top - y0, 1.6);
-      this.walls.setMatrixAt(k, m.compose(p, q, s));
-      p.set(ctr.x, top, ctr.z); s.set(1, 1, 1);
-      this.roofs.setMatrixAt(k, m.compose(p, q, s));
-      const col = new THREE.Color(HOUSE_COLS[k % HOUSE_COLS.length]);
-      this.houseCols.push(col);
-      this.houseFlooded.push(false);
-      this.walls.setColorAt(k, col);
+  // ---------- assets
+  private async load() {
+    const base = import.meta.env.BASE_URL;
+    const draco = new DRACOLoader();
+    draco.setDecoderPath(base + 'draco/');
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(draco);
+    const list = await Promise.all(ASSETS.map(a => loader.loadAsync(`${base}assets/${a}.glb`)));
+    ASSETS.forEach((a, k) => {
+      const s = list[k].scene;
+      s.traverse(o => { const mm = o as THREE.Mesh; if (mm.isMesh) { mm.castShadow = true; mm.receiveShadow = true; } });
+      this.assets[a] = s;
     });
-    this.walls.castShadow = this.roofs.castShadow = true;
-    this.walls.receiveShadow = true;
-    this.scene.add(this.walls, this.roofs);
+    draco.dispose();
+    this.placeScenery();
+    this.rebuildProps();
   }
 
-  private buildPalms() {
-    const { sim, n } = this;
+  private batch(name: AssetName, mats: THREE.Matrix4[], tints?: THREE.Color[]): Batch {
+    const out: Batch = { meshes: [], tinted: [] };
+    const src = this.assets[name];
+    if (!src || mats.length === 0) return out;
+    src.updateMatrixWorld(true);
+    src.traverse(o => {
+      const mm = o as THREE.Mesh;
+      if (!mm.isMesh) return;
+      const geo = mm.geometry.clone().applyMatrix4(mm.matrixWorld);
+      const material = mm.material as THREE.MeshStandardMaterial;
+      const im = new THREE.InstancedMesh(geo, material, mats.length);
+      mats.forEach((x, k) => im.setMatrixAt(k, x));
+      if (tints && material.name.startsWith('Tint')) { tints.forEach((c, k) => im.setColorAt(k, c)); out.tinted.push(im); }
+      im.castShadow = true;
+      im.receiveShadow = true;
+      im.computeBoundingSphere();
+      out.meshes.push(im);
+      this.scene.add(im);
+    });
+    return out;
+  }
+
+  private placeScenery() {
+    const up = new THREE.Vector3(0, 1, 0);
+    const mat = (p: THREE.Vector3, yaw: number, s = 1, tilt = 0) =>
+      new THREE.Matrix4().compose(p, new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt, yaw, tilt * 0.5)), new THREE.Vector3(s, s, s));
     const r = rng(42);
-    const spots: number[] = [];
-    for (let tries = 0; tries < 800 && spots.length < 55; tries++) {
-      const i = Math.floor(r() * n * n);
-      const x = i % n;
-      if (sim.surface[i] !== S.Grass && !(sim.surface[i] === S.Sand && x < 41)) continue;
-      if (spots.some(o => Math.abs((o % n) - x) + Math.abs(Math.floor(o / n) - Math.floor(i / n)) < 2)) continue;
-      spots.push(i);
+
+    // Houses: origin is the finished floor
+    for (const t of HOUSE_TYPES) {
+      const ss = this.slots.filter(s => s.type === t);
+      const ms = ss.map(s => { const p = this.gridToWorld(s.gx, s.gy); p.y = this.sim.houses[this.slots.indexOf(s)].floor * VS; return mat(p, s.rot); });
+      this.batches[t] = this.batch(t, ms, ss.map(s => s.color));
     }
-    const trunkG = new THREE.CylinderGeometry(0.05, 0.08, 1.4, 5);
-    trunkG.translate(0, 0.7, 0);
-    const crownG = new THREE.ConeGeometry(0.75, 0.3, 7, 1, true);
-    crownG.translate(0, 1.45, 0);
-    const trunks = new THREE.InstancedMesh(trunkG, new THREE.MeshStandardMaterial({ color: 0x8a7255, roughness: 0.9 }), spots.length);
-    const crowns = new THREE.InstancedMesh(crownG, new THREE.MeshStandardMaterial({ color: 0x4f8a3c, roughness: 0.8, flatShading: true, side: THREE.DoubleSide }), spots.length);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3();
-    spots.forEach((i, k) => {
-      const p = this.toWorld(i);
-      e.set((r() - 0.5) * 0.25, r() * 6, (r() - 0.5) * 0.25);
-      q.setFromEuler(e);
-      const sc = 0.8 + r() * 0.5;
-      s.set(sc, sc, sc);
-      m.compose(p, q, s);
-      trunks.setMatrixAt(k, m);
-      crowns.setMatrixAt(k, m);
+
+    // Cars, shrubs
+    const cars: THREE.Matrix4[] = [], carCols: THREE.Color[] = [], shrubs: THREE.Matrix4[] = [];
+    this.slots.forEach((s, k) => {
+      if (s.car) {
+        const [ox, oz] = rotXZ(CAR_SPOT[s.type][0], CAR_SPOT[s.type][1], s.rot);
+        const p = this.gridToWorld(s.gx + ox, s.gy + oz);
+        cars.push(mat(p, s.rot + (r() < 0.5 ? 0 : Math.PI), 1));
+        carCols.push(new THREE.Color(CAR_COLS[k % CAR_COLS.length]));
+      }
+      for (const [lx, lz] of [[-0.8, 0.82], [-0.45, 0.85], [0.85, -0.8], [-0.85, -0.8]]) {
+        if (r() < 0.25) continue;
+        const [ox, oz] = rotXZ(lx, lz, s.rot);
+        shrubs.push(mat(this.gridToWorld(s.gx + ox, s.gy + oz), r() * 6, 0.7 + r() * 0.5));
+      }
     });
-    trunks.castShadow = crowns.castShadow = true;
-    this.scene.add(trunks, crowns);
+    this.batch('car', cars, carCols);
+
+    // Palms: street rows plus scattered across yards, park, dune and the scenery border
+    const palms: [THREE.Matrix4[], THREE.Matrix4[]] = [[], []];
+    const addPalm = (gx: number, gy: number) => palms[r() < 0.5 ? 0 : 1].push(mat(this.gridToWorld(gx, gy), r() * 6.28, 0.8 + r() * 0.45, (r() - 0.5) * 0.12));
+    for (let y = -PAD + 1; y < this.n + PAD - 1; y += 4) {
+      if (Math.abs(y - 23) < 3) continue;
+      addPalm(17.55, y + 0.5); addPalm(22.45, y + 2.5);
+    }
+    const { m, surf, elev } = this.pad;
+    const nearHouse = (gx: number, gy: number) => this.slots.some(s => Math.abs(s.gx - gx) < 2.2 && Math.abs(s.gy - gy) < 1.9);
+    for (let t = 0; t < 2500 && palms[0].length + palms[1].length < 150; t++) {
+      const x = Math.floor(r() * m), y = Math.floor(r() * m), i = y * m + x;
+      const gx = x - PAD + (r() - 0.5) * 0.6, gy = y - PAD + (r() - 0.5) * 0.6;
+      const s = surf[i];
+      if (!(s === S.Grass || (s === S.Sand && elev[i] > 3))) continue;
+      if (nearHouse(gx, gy) || (gx > 17 && gx < 23) || (gy > 20.5 && gy < 25.5 && gx < 37) || (gx > 27 && gx < 29)) continue;
+      if (s === S.Grass && r() < 0.45) { shrubs.push(mat(this.gridToWorld(gx, gy), r() * 6, 0.8 + r() * 0.6)); continue; }
+      addPalm(gx, gy);
+    }
+    this.batch('palm_a', palms[0]);
+    this.batch('palm_b', palms[1]);
+    this.batch('shrub', shrubs);
+
+    const lights: THREE.Matrix4[] = [];
+    for (let y = -PAD + 2; y < this.n + PAD; y += 8) {
+      lights.push(mat(this.gridToWorld(18.2, y), Math.PI / 2));
+      lights.push(mat(this.gridToWorld(21.8, y + 4), -Math.PI / 2));
+    }
+    this.batch('streetlight', lights);
   }
 
-  outfallPos = new THREE.Vector3();
   private buildOutfall() {
     const n = this.n;
-    const g = new THREE.CylinderGeometry(0.2, 0.2, 1.2, 12, 1, true);
+    const g = new THREE.CylinderGeometry(0.2, 0.2, 1.2, 16, 1, true);
     g.rotateZ(Math.PI / 2);
-    const pipe = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x55585c, metalness: 0.5, roughness: 0.5, side: THREE.DoubleSide }));
+    const pipe = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x55585c, metalness: 0.6, roughness: 0.45, side: THREE.DoubleSide }));
     this.outfallPos.set(6 - n / 2 + 0.5 - 0.6, this.sim.outfallElev * VS, OUTFALL_ROW - n / 2 + 0.5);
     pipe.position.copy(this.outfallPos);
     pipe.castShadow = true;
@@ -277,32 +386,29 @@ export class World {
 
   rebuildProps() {
     this.props.clear();
+    const { drain, check_valve, pump } = this.assets;
+    if (!drain || !check_valve || !pump) return;
     for (const d of this.sim.drains) {
       const p = this.toWorld(d.i);
-      const g = new THREE.Mesh(this.geo.grate, this.mat.grate);
-      g.position.set(p.x, p.y + 0.03, p.z);
+      const g = drain.clone();
+      g.position.copy(p);
       this.props.add(g);
       if (d.valve) {
-        const v = new THREE.Mesh(this.geo.valve, this.mat.valve);
-        v.rotation.x = -Math.PI / 2;
-        v.position.set(p.x, p.y + 0.07, p.z);
+        const v = check_valve.clone();
+        v.position.set(p.x, p.y + 0.06, p.z);
         this.props.add(v);
       }
     }
     for (const pm of this.sim.pumps) {
-      const p = this.toWorld(pm.i);
-      const b = new THREE.Mesh(this.geo.pump, this.mat.pump);
-      b.position.set(p.x, p.y + 0.22, p.z);
-      b.castShadow = true;
-      const st = new THREE.Mesh(this.geo.stack, this.mat.grate);
-      st.position.set(p.x + 0.18, p.y + 0.6, p.z);
-      this.props.add(b, st);
+      const b = pump.clone();
+      b.position.copy(this.toWorld(pm.i));
+      this.props.add(b);
     }
   }
 
+  // ---------- effects
   private resetDrop(a: Float32Array, k: number, y: number) {
-    const n = this.n;
-    const x = (Math.random() - 0.5) * n, z = (Math.random() - 0.5) * n;
+    const x = (Math.random() - 0.5) * 60, z = (Math.random() - 0.5) * 60;
     a.set([x, y, z, x + 0.08, y + 0.7, z + 0.05], k * 6);
   }
 
@@ -310,7 +416,7 @@ export class World {
     const k = this.partHead;
     this.partHead = (k + 1) % this.partData.length;
     const pa = this.parts.geometry.attributes.position as THREE.BufferAttribute;
-    pa.setXYZ(k, pos.x + (Math.random() - 0.5) * 0.3, pos.y, pos.z + (Math.random() - 0.5) * 0.3);
+    pa.setXYZ(k, pos.x + (Math.random() - 0.5) * 0.25, pos.y, pos.z + (Math.random() - 0.5) * 0.25);
     const d = this.partData[k];
     d.v.set(vel.x + (Math.random() - 0.5) * spread, vel.y * (0.7 + Math.random() * 0.5), vel.z + (Math.random() - 0.5) * spread);
     d.life = 0.7;
@@ -320,8 +426,8 @@ export class World {
     const { sim, n } = this;
     this.controls.update();
     this.waterMat.uniforms.uTime.value = t;
+    this.sea.position.y = sim.tide * VS - 0.01;
 
-    // Water surface from sim depth
     const wp = this.water.geometry.attributes.position as THREE.BufferAttribute;
     const wd = this.water.geometry.attributes.aDepth as THREE.BufferAttribute;
     for (let i = 0; i < n * n; i++) {
@@ -332,17 +438,16 @@ export class World {
     wp.needsUpdate = true;
     wd.needsUpdate = true;
 
-    // Houses turn red while water is above the floor
+    // Walls turn red while water is above the floor
     sim.houses.forEach((h, k) => {
       const f = h.depth > 0.001;
-      if (f !== this.houseFlooded[k]) {
-        this.houseFlooded[k] = f;
-        this.walls.setColorAt(k, f ? FLOOD_COL : this.houseCols[k]);
-        this.walls.instanceColor!.needsUpdate = true;
-      }
+      if (f === this.houseFlooded[k]) return;
+      const s = this.slots[k], b = this.batches[s.type];
+      if (!b) return;
+      this.houseFlooded[k] = f;
+      for (const im of b.tinted) { im.setColorAt(s.idx, f ? FLOOD_COL : s.color); im.instanceColor!.needsUpdate = true; }
     });
 
-    // Rain
     const vis = Math.round(Math.min(1, sim.rain / 4) * this.rainCount);
     this.rain.geometry.setDrawRange(0, vis * 2);
     if (vis > 0) {
@@ -357,18 +462,17 @@ export class World {
       rp.needsUpdate = true;
     }
 
-    // Particles
     const up = new THREE.Vector3(0, 2.2, 0);
     for (const d of sim.drains) {
       if (d.flow < -0.01 && Math.random() < Math.min(1, -d.flow * 3)) {
-        const p = this.toWorld(d.i); p.y += sim.water[d.i] * VS;
+        const p = this.toWorld(d.i); p.y += sim.water[d.i] * VS + 0.05;
         this.spawn(p, up, 0.6);
       }
     }
     for (const pm of sim.pumps) {
       if (pm.flow > 0.02 && Math.random() < 0.5) {
-        const p = this.toWorld(pm.i); p.y += 0.8; p.x += 0.18;
-        this.spawn(p, new THREE.Vector3(-0.8, 1.2, 0), 0.4);
+        const p = this.toWorld(pm.i); p.x -= 0.46; p.y += 0.22;
+        this.spawn(p, new THREE.Vector3(-1.0, 0.8, 0), 0.3);
       }
     }
     const outflow = sim.drains.reduce((s, d) => s + Math.max(0, d.flow), 0) + sim.pumps.reduce((s, p) => s + p.flow, 0);

@@ -2,7 +2,8 @@
 
 ## Now (Milestone 1 polish)
 - Test on a mid-range Android phone. Target 30 fps. Drop shadow map to 1024 if needed.
-- Tune foam: speckle at thin water edges is noisy.
+- Check frame rate with the new assets (about 150 palms, 24 houses, 2048 ground texture). Lower texture or palm count on weak phones.
+- Seam between the sim bay water and the open-sea planes at the grid edge.
 - Flow-map animation in the water shader (advect ripples along sim flux).
 - Move sim into a Web Worker.
 - Unit tests for sim (headless run already works with `node --experimental-strip-types`).
@@ -17,7 +18,6 @@
 ## On Ice
 - Supabase (progress, accounts, shared scenarios). Not until a feature needs it.
 - Godot port. Only if phone performance fails.
-- Blender glTF assets (houses, palms are procedural placeholders for now).
 
 <details>
 <summary>Recently Done</summary>
@@ -26,6 +26,8 @@
 - Virtual-pipes water sim with rain, infiltration, groundwater, tide boundary.
 - Drains with tide-dependent outfall (backflow), check valves, pumps.
 - Storm 1 and Storm 2 scenarios, grading by worst house depth, plain-language failure notes.
+- Blender asset pipeline (`blender/build_assets.py`): 3 house styles, 2 palms, shrub, car, streetlight, drain, check valve, pump. Baked AO, Draco glb.
+- Physical sky with environment reflections, painted ground (roads, markings, sidewalks, driveways, pools), scenery border past the map edge.
 - Water depth shader, rain, backflow and outfall particles, elevation lens.
 
 </details>

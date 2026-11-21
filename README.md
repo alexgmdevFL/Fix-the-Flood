@@ -9,6 +9,8 @@ Stack: Vite, TypeScript, Three.js, PWA. Sim (`src/sim`) is independent of render
 
 Netlify: build `npm run build`, publish `dist` (set in `netlify.toml`).
 
+Assets: `blender/build_assets.py` builds every model procedurally, bakes ambient occlusion, and exports Draco .glb files to `public/assets`. Rebuild with `pip install bpy` then `python3 blender/build_assets.py` (or `blender -b -P blender/build_assets.py`).
+
 See `TODO.md` for priorities.
 
 ```
