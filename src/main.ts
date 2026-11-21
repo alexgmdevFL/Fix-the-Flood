@@ -83,8 +83,9 @@ $('lens').onclick = () => {
   world.setLens(world.lens === 'surface' ? 'elevation' : 'surface');
   $('lens').textContent = world.lens === 'surface' ? 'Elevation lens' : 'Surface view';
 };
-if (innerWidth < 640) $('panel').classList.add('collapsed');
-$('panelToggle').onclick = () => $('panel').classList.toggle('collapsed');
+const setPanel = (c: boolean) => { $('panel').classList.toggle('collapsed', c); $('panelToggle').textContent = c ? 'More' : 'Hide'; };
+setPanel(innerWidth < 640);
+$('panelToggle').onclick = () => setPanel(!$('panel').classList.contains('collapsed'));
 rainIn.oninput = () => { freePlay(); sim.rain = +rainIn.value; playing = true; updatePlay(); };
 tideIn.oninput = () => { freePlay(); sim.tide = +tideIn.value; playing = true; updatePlay(); };
 
