@@ -21,7 +21,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd8ea; fon
 button { font: inherit; font-size: 16px; font-weight: 600; min-height: 46px; border: 1px solid #0003; background: #fff; border-radius: 11px; padding: 10px 14px; cursor: pointer; color: inherit; }
 button:active { transform: scale(0.97); }
 button.on, button.primary { background: #145a7a; color: #fff; border-color: #145a7a; }
-#tools { bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; max-width: 720px; margin: 0 auto; padding: 16px 16px calc(var(--badge) + env(safe-area-inset-bottom)); }
+#tools { bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; max-width: 900px; margin: 0 auto; padding: 16px 16px calc(var(--badge) + env(safe-area-inset-bottom)); }
 #tools button { min-height: 56px; padding: 6px 4px; font-size: 16px; line-height: 1.15; box-shadow: 0 3px 10px #0003; }
 #modal { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100% - 32px)); background: #fff; border-radius: 16px; padding: 20px; font-size: 17px; line-height: 1.4; box-shadow: 0 10px 40px #0005; }
 #modal h2 { margin: 0 0 10px; font-size: 22px; }
@@ -29,12 +29,17 @@ button.on, button.primary { background: #145a7a; color: #fff; border-color: #145
 #modal .grade.good { color: #1b7a3d; }
 #modal .grade.bad { color: #b3261e; }
 #modal .row { display: flex; gap: 10px; flex-wrap: wrap; }
+#replay { left: 16px; right: 16px; bottom: calc(var(--badge) + 150px + env(safe-area-inset-bottom)); max-width: 620px; margin: 0 auto; display: flex; gap: 10px; align-items: center; background: #fffffff0; border-radius: 14px; padding: 10px 12px; box-shadow: 0 4px 18px #0003; font-size: 15px; font-weight: 600; }
+#replay input { flex: 1; min-width: 60px; height: 32px; }
+#replay span { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hidden { display: none !important; }
 @media (max-width: 640px) {
   #top h1 { font-size: 20px; }
-  #note { top: auto; bottom: calc(var(--badge) + 150px + env(safe-area-inset-bottom)); }
-  #panel { top: auto; bottom: calc(var(--badge) + 84px + env(safe-area-inset-bottom)); left: 16px; right: 16px; width: auto; }
+  #note { top: auto; bottom: calc(var(--badge) + 214px + env(safe-area-inset-bottom)); }
+  #replay { bottom: calc(var(--badge) + 146px + env(safe-area-inset-bottom)); }
+  #panel { top: auto; bottom: calc(var(--badge) + 146px + env(safe-area-inset-bottom)); left: 16px; right: 16px; width: auto; }
   #panel:not(.collapsed) ~ #note { display: none; }
-  #tools { gap: 6px; }
+  #tools { gap: 6px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  #tools button { min-height: 52px; }
   #tools button { font-size: 15px; }
 }

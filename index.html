@@ -21,19 +21,28 @@
       <button id="play">Play</button><button id="speed">1x</button><button id="reset">Reset</button><button id="panelToggle">Hide</button>
     </div>
     <div class="body">
-      <div class="row"><button id="s1">Storm 1</button><button id="s2">Storm 2</button></div>
+      <div class="row"><button id="s1">Storm 1</button><button id="s2">Storm 2</button><button id="s3">Storm 3</button></div>
       <label>Rain <span id="rainV"></span><input id="rain" type="range" min="0" max="6" step="0.1" value="0" /></label>
       <label>Tide <span id="tideV"></span><input id="tide" type="range" min="0" max="3.5" step="0.05" value="1" /></label>
-      <div class="row"><button id="lens">Elevation lens</button></div>
+      <div class="row"><button id="lens">Lens: Normal</button></div>
     </div>
   </div>
   <div id="note" class="hud"></div>
   <div id="tools" class="hud">
     <button data-tool="inspect">Inspect</button>
     <button data-tool="drain" class="on">Drain</button>
-    <button data-tool="valve">Check valve</button>
+    <button data-tool="valve">Valve</button>
     <button data-tool="pump">Pump</button>
+    <button data-tool="swale">Swale</button>
+    <button data-tool="pond">Pond</button>
+    <button data-tool="raise">Raise road</button>
     <button data-tool="remove">Remove</button>
+  </div>
+  <div id="replay" class="hud hidden">
+    <button id="rpPlay">Pause</button>
+    <input id="rpSlider" type="range" min="0" max="0" step="1" value="0" />
+    <span id="rpTime"></span>
+    <button id="rpExit">Exit</button>
   </div>
   <div id="modal" class="hud hidden"></div>
   <script type="module" src="/src/main.ts"></script>

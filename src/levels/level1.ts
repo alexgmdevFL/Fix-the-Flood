@@ -68,4 +68,9 @@ export const SCENARIOS: Scenario[] = [
     duration: 300, rain: t => (t >= 60 && t < 200 ? 3 : 0),
     tide: t => 1.0 + 1.9 * Math.max(0, Math.sin(Math.PI * t / 300)), gwOffset: 0,
   },
+  {
+    id: 'storm3', title: 'Storm 3: Wet season',
+    concept: 'When the ground is already full, rain cannot soak in, and water rises from below.',
+    duration: 270, rain: t => (t < 180 ? 4.5 : 0), tide: () => 1.0, gwOffset: 0.8,
+  },
 ];

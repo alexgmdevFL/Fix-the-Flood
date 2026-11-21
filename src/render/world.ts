@@ -9,7 +9,8 @@ import { makeWaterMaterial } from './water.ts';
 import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.ts';
 
 export const VS = 0.35; // world units per foot of elevation (vertical exaggeration)
-export type Lens = 'surface' | 'elevation';
+export type Lens = 'surface' | 'elevation' | 'groundwater' | 'flow';
+export interface View { water: Float32Array; vx: Float32Array | null; vy: Float32Array | null; tide: number; rain: number; live: boolean }
 
 // Quality tier: ?q=low or ?q=high forces it, otherwise touch devices with few cores or little memory get low.
 export const LOW = (() => {
@@ -69,6 +70,9 @@ export class World {
   partHead = 0;
   lens: Lens = 'surface';
   outfallPos = new THREE.Vector3();
+  arrows: THREE.InstancedMesh;
+  forceArrows = false;
+  private gwT = 0;
 
   constructor(parent: HTMLElement, sim: Sim) {
     this.sim = sim;
@@ -128,11 +132,12 @@ export class World {
     for (let i = 0; i < m * m; i++) tp.setY(i, this.pad.elev[i] * VS);
     tg.computeVertexNormals();
     tg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(m * m * 3), 3));
-    this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras(), LOW ? 1024 : 2048), roughness: 0.95 });
+    this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras(), LOW ? 1024 : 2048), roughness: 0.95, vertexColors: true });
     this.lensMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
     this.terrain = new THREE.Mesh(tg, this.groundMat);
     this.terrain.receiveShadow = true;
     this.scene.add(this.terrain);
+    this.paintColors();
 
     // Open sea beyond the grid on the bay and ocean sides
     const seaMat = new THREE.MeshStandardMaterial({ color: 0x1b5566, roughness: 0.12, metalness: 0.1 });
@@ -171,6 +176,16 @@ export class World {
     this.cursor.renderOrder = 3;
     this.cursor.visible = false;
     this.scene.add(this.cursor);
+
+    // Flow arrows (flow lens and replay)
+    const shape = new THREE.Shape([new THREE.Vector2(0, 0.42), new THREE.Vector2(0.24, 0.02), new THREE.Vector2(0.08, 0.02), new THREE.Vector2(0.08, -0.36), new THREE.Vector2(-0.08, -0.36), new THREE.Vector2(-0.08, 0.02), new THREE.Vector2(-0.24, 0.02)]);
+    const ag = new THREE.ShapeGeometry(shape);
+    ag.rotateX(Math.PI / 2);
+    this.arrows = new THREE.InstancedMesh(ag, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }), Math.ceil(n / 2) ** 2);
+    this.arrows.count = 0;
+    this.arrows.renderOrder = 2;
+    this.arrows.frustumCulled = false;
+    this.scene.add(this.arrows);
 
     const rp = new Float32Array(this.rainCount * 6);
     const rg = new THREE.BufferGeometry();
@@ -269,21 +284,63 @@ export class World {
 
   setLens(l: Lens) {
     this.lens = l;
-    if (l === 'elevation') {
-      const { m, elev } = this.pad;
-      const ca = this.terrain.geometry.attributes.color as THREE.BufferAttribute;
-      const c = new THREE.Color();
-      for (let i = 0; i < m * m; i++) {
-        const e = elev[i];
-        const t = Math.min(1, Math.max(0, (e - 1.5) / 3));
-        c.setHSL(0.62 - 0.55 * t, 0.65, 0.42 + 0.12 * t);
-        if (e > 0 && Math.abs(e - Math.round(e * 2) / 2) < 0.04) c.multiplyScalar(0.7);
-        c.convertSRGBToLinear();
-        ca.setXYZ(i, c.r, c.g, c.b);
+    this.paintColors();
+    this.terrain.material = l === 'elevation' || l === 'groundwater' ? this.lensMat : this.groundMat;
+  }
+
+  /** Writes the terrain color attribute: earthwork tints in surface/flow view, or the active lens ramp. */
+  paintColors() {
+    const { m, elev } = this.pad;
+    const { sim, n } = this;
+    const ca = this.terrain.geometry.attributes.color as THREE.BufferAttribute;
+    const c = new THREE.Color();
+    for (let y = 0; y < m; y++) {
+      for (let x = 0; x < m; x++) {
+        const pi = y * m + x;
+        const gx = Math.min(n - 1, Math.max(0, x - PAD)), gy = Math.min(n - 1, Math.max(0, y - PAD));
+        const gi = gy * n + gx;
+        const inGrid = x - PAD === gx && y - PAD === gy;
+        if (this.lens === 'elevation') {
+          const e = elev[pi];
+          const t = Math.min(1, Math.max(0, (e - 1.5) / 3));
+          c.setHSL(0.62 - 0.55 * t, 0.65, 0.42 + 0.12 * t);
+          if (e > 0 && Math.abs(e - Math.round(e * 2) / 2) < 0.04) c.multiplyScalar(0.7);
+          c.convertSRGBToLinear();
+        } else if (this.lens === 'groundwater') {
+          if (sim.open[gi]) c.setRGB(0.05, 0.2, 0.45);
+          else {
+            const room = sim.elev[gi] - sim.gw[gi]; // dry soil above the water table, ft
+            const t = Math.min(1, Math.max(0, room / 1.5));
+            c.setRGB(0.1 + 0.75 * t, 0.35 + 0.45 * t, 0.85 - 0.5 * t);
+            if (room < 0.03) c.setRGB(0.1, 0.45, 1.0);
+          }
+          c.convertSRGBToLinear();
+        } else {
+          c.setRGB(1, 1, 1);
+          if (inGrid && sim.surface[gi] === S.Swale) c.setRGB(0.72, 0.9, 0.62);
+          if (inGrid && sim.surface[gi] === S.Pond) c.setRGB(0.62, 0.55, 0.42);
+          if (inGrid && sim.elev[gi] > sim.elev0[gi] + 0.01) c.setRGB(0.82, 0.82, 0.85);
+        }
+        ca.setXYZ(pi, c.r, c.g, c.b);
       }
-      ca.needsUpdate = true;
     }
-    this.terrain.material = l === 'elevation' ? this.lensMat : this.groundMat;
+    ca.needsUpdate = true;
+  }
+
+  /** Call after the sim reshapes a cell (earthworks). */
+  refreshCells(cells: number[]) {
+    const { m } = this.pad, n = this.n;
+    const tp = this.terrain.geometry.attributes.position as THREE.BufferAttribute;
+    for (const i of cells) {
+      const pi = (Math.floor(i / n) + PAD) * m + (i % n) + PAD;
+      this.pad.elev[pi] = this.sim.elev[i];
+      tp.setY(pi, this.sim.elev[i] * VS);
+    }
+    tp.needsUpdate = true;
+    this.terrain.geometry.computeVertexNormals();
+    this.terrain.geometry.computeBoundingSphere();
+    this.paintColors();
+    this.rebuildProps();
   }
 
   // ---------- assets
@@ -436,16 +493,16 @@ export class World {
     d.life = 0.7;
   }
 
-  update(dt: number, t: number) {
+  update(dt: number, t: number, v: View) {
     const { sim, n } = this;
     this.controls.update();
     this.waterMat.uniforms.uTime.value = t;
-    this.sea.position.y = sim.tide * VS - 0.03;
+    this.sea.position.y = v.tide * VS - 0.03;
 
     const wp = this.water.geometry.attributes.position as THREE.BufferAttribute;
     const wd = this.water.geometry.attributes.aDepth as THREE.BufferAttribute;
     for (let i = 0; i < n * n; i++) {
-      const d = sim.open[i] ? 0 : sim.water[i];
+      const d = sim.open[i] ? 0 : v.water[i];
       wp.setY(i, d > 0.004 ? (sim.elev[i] + d) * VS : sim.elev[i] * VS - 0.03);
       wd.setX(i, d);
     }
@@ -454,7 +511,9 @@ export class World {
 
     // Walls turn red while water is above the floor
     sim.houses.forEach((h, k) => {
-      const f = h.depth > 0.001;
+      let lvl = -99;
+      for (const c of h.cells) if (v.water[c] > 0.002) lvl = Math.max(lvl, sim.elev[c] + v.water[c]);
+      const f = lvl > h.floor;
       if (f === this.houseFlooded[k]) return;
       const s = this.slots[k], b = this.batches[s.type];
       if (!b) return;
@@ -462,7 +521,7 @@ export class World {
       for (const im of b.tinted) { im.setColorAt(s.idx, f ? FLOOD_COL : s.color); im.instanceColor!.needsUpdate = true; }
     });
 
-    const vis = Math.round(Math.min(1, sim.rain / 4) * this.rainCount);
+    const vis = Math.round(Math.min(1, v.rain / 4) * this.rainCount);
     this.rain.geometry.setDrawRange(0, vis * 2);
     if (vis > 0) {
       const rp = this.rain.geometry.attributes.position as THREE.BufferAttribute;
@@ -477,6 +536,7 @@ export class World {
     }
 
     const up = new THREE.Vector3(0, 2.2, 0);
+    if (v.live) {
     for (const d of sim.drains) {
       if (d.flow < -0.01 && Math.random() < Math.min(1, -d.flow * 3)) {
         const p = this.toWorld(d.i); p.y += sim.water[d.i] * VS + 0.05;
@@ -491,6 +551,27 @@ export class World {
     }
     const outflow = sim.drains.reduce((s, d) => s + Math.max(0, d.flow), 0) + sim.pumps.reduce((s, p) => s + p.flow, 0);
     if (outflow > 0.05 && Math.random() < Math.min(1, outflow)) this.spawn(this.outfallPos, new THREE.Vector3(-2.2, 0.6, 0), 0.4);
+    }
+    // Arrows on every other cell where water is moving
+    if ((this.lens === 'flow' || this.forceArrows) && v.vx && v.vy) {
+      const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), pos = new THREE.Vector3(), up2 = new THREE.Vector3(0, 1, 0);
+      let c = 0;
+      for (let y = 1; y < n; y += 2) for (let x = 1; x < n; x += 2) {
+        const i = y * n + x;
+        if (sim.open[i] || v.water[i] < 0.03) continue;
+        const fx = v.vx[i], fz = v.vy[i], mag = Math.hypot(fx, fz);
+        if (mag < 0.0015) continue;
+        const s = Math.min(1.1, 0.45 + mag * 25);
+        pos.set(x - n / 2 + 0.5, (sim.elev[i] + v.water[i]) * VS + 0.04, y - n / 2 + 0.5);
+        q.setFromAxisAngle(up2, Math.atan2(fx, fz));
+        sc.set(s, 1, s);
+        this.arrows.setMatrixAt(c++, mtx.compose(pos, q, sc));
+      }
+      this.arrows.count = c;
+      this.arrows.instanceMatrix.needsUpdate = true;
+    } else this.arrows.count = 0;
+    if (this.lens === 'groundwater' && (this.gwT += dt) > 0.5) { this.gwT = 0; this.paintColors(); }
+
     const pa = this.parts.geometry.attributes.position as THREE.BufferAttribute;
     for (let k = 0; k < this.partData.length; k++) {
       const d = this.partData[k];

@@ -7,11 +7,11 @@
 - Unit tests for sim (headless run already works with `node --experimental-strip-types`).
 - PNG icons (192, 512) for older Android installs.
 
-## Next (Milestone 2: Level 1 full)
-- Storm 3: wet season (raise `gwOffset`, ponds that do not drain).
-- Tools: swale, retention pond, raise road.
-- Replay with flow arrows after each storm.
-- Seawall-pushes-water-to-neighbors and pond-mosquito consequences.
+## Next
+- Milestone 3: zoom levels (parcel, neighborhood, watershed) with LOD swaps.
+- Ponds and swales only matter in light storms. Consider drains that can pipe into a pond.
+- Seawall tool and its push-water-to-neighbors consequence.
+- Link Netlify to GitHub for automatic deploys (dashboard step).
 
 ## On Ice
 - Supabase (progress, accounts, shared scenarios). Not until a feature needs it.
@@ -20,6 +20,9 @@
 <details>
 <summary>Recently Done</summary>
 
+- Milestone 2: Storm 3 (wet season), swale, pond and raise-road tools, replay with flow arrows, groundwater and flow lenses, mosquito and raised-road consequence notes.
+- Larger UI text and touch targets, tool bar clear of the hosting badge.
+- Netlify project high-water-flood, deployed.
 - Quality tiers for weak phones (smaller texture and shadows, fewer palms, lower resolution) plus automatic resolution drop when fps falls under 28.
 - Removed the bay and ocean seam: the open sea plane covers all open water.
 - Vite + TypeScript + Three.js PWA scaffold, Netlify config.

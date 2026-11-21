@@ -1,10 +1,11 @@
 // Grid-based shallow-water sim. Units: feet and minutes. No rendering code here.
 
-export const S = { Water: 0, Sand: 1, Grass: 2, Pavement: 3, House: 4, Wall: 5 } as const;
-export const SURFACE_NAMES = ['Open water', 'Sand', 'Grass', 'Pavement', 'House', 'Seawall'];
+export const S = { Water: 0, Sand: 1, Grass: 2, Pavement: 3, House: 4, Wall: 5, Swale: 6, Pond: 7 } as const;
+export const SURFACE_NAMES = ['Open water', 'Sand', 'Grass', 'Pavement', 'House', 'Seawall', 'Swale', 'Retention pond'];
+export type Earthwork = 'swale' | 'pond' | 'raise' | 'restore';
 
 // Infiltration rate by surface, inches per hour
-export const INFIL_IN_HR = [0, 3, 1, 0.05, 0, 0];
+export const INFIL_IN_HR = [0, 3, 1, 0.05, 0, 0, 2.5, 1.5];
 export const POROSITY = 0.3;
 export const DRAIN_CAP = 0.4; // ft of depth per minute one inlet can pass
 export const DRAIN_K = 2.0;
@@ -25,12 +26,14 @@ export interface LevelData {
   outfallElev: number;
 }
 
-export interface Stats { backflow: number; drained: number; pumped: number; blockedMin: number; worst: number }
+export interface Stats { backflow: number; drained: number; pumped: number; blockedMin: number; worst: number; emerged: number }
 
 export class Sim {
   n: number;
   elev: Float32Array;
   surface: Uint8Array;
+  elev0: Float32Array; // original terrain, for undoing earthworks
+  surface0: Uint8Array;
   open: Uint8Array;
   water: Float32Array;
   gw: Float32Array;
@@ -43,12 +46,14 @@ export class Sim {
   tide = 1; // ft
   gwOffset = 0; // wet season raises this
   time = 0; // minutes
-  stats: Stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0 };
+  stats: Stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0, emerged: 0 };
 
   constructor(l: LevelData) {
     this.n = l.n;
     this.elev = l.elev;
     this.surface = l.surface;
+    this.elev0 = l.elev.slice();
+    this.surface0 = l.surface.slice();
     this.open = l.open;
     this.houses = l.houses;
     this.outfallElev = l.outfallElev;
@@ -66,13 +71,44 @@ export class Sim {
     this.water.fill(0);
     this.fR.fill(0); this.fL.fill(0); this.fU.fill(0); this.fD.fill(0);
     const b = this.gwBase();
-    for (let i = 0; i < this.gw.length; i++) this.gw[i] = Math.min(this.elev[i] - 0.05, b);
-    for (let i = 0; i < this.water.length; i++) if (this.open[i]) this.water[i] = Math.max(0, this.tide - this.elev[i]);
+    for (let i = 0; i < this.gw.length; i++) {
+      if (this.open[i]) { this.water[i] = Math.max(0, this.tide - this.elev[i]); this.gw[i] = this.elev[i]; continue; }
+      // Where the water table sits above the ground, it starts out as standing water
+      if (b >= this.elev[i]) { this.gw[i] = this.elev[i]; this.water[i] = b - this.elev[i]; } else this.gw[i] = b;
+    }
     this.time = 0;
-    this.stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0 };
+    this.stats = { backflow: 0, drained: 0, pumped: 0, blockedMin: 0, worst: 0, emerged: 0 };
     for (const h of this.houses) { h.depth = 0; h.maxDepth = 0; }
     for (const d of this.drains) d.flow = 0;
     for (const p of this.pumps) p.flow = 0;
+  }
+
+  /** Reshape a cell. Returns '' when done, otherwise a reason it was refused. */
+  modify(i: number, kind: Earthwork): string {
+    const s0 = this.surface0[i];
+    if (this.open[i] || s0 === S.House || s0 === S.Wall) return "Can't build there.";
+    if (kind === 'restore') {
+      if (this.elev[i] === this.elev0[i] && this.surface[i] === s0) return 'Nothing to remove here.';
+      this.elev[i] = this.elev0[i]; this.surface[i] = s0;
+      return '';
+    }
+    if (kind === 'raise') {
+      if (s0 !== S.Pavement) return 'Raise road only works on pavement.';
+      if (this.elev[i] >= this.elev0[i] + 0.99) return 'Already raised the full 1 ft.';
+      this.elev[i] += 0.5;
+      return '';
+    }
+    if (s0 !== S.Grass && s0 !== S.Sand) return 'Swales and ponds go on open ground, not pavement.';
+    this.elev[i] = this.elev0[i] - (kind === 'swale' ? 0.4 : 1.2);
+    this.surface[i] = kind === 'swale' ? S.Swale : S.Pond;
+    return '';
+  }
+
+  raisedCells() { let c = 0; for (let i = 0; i < this.elev.length; i++) if (this.elev[i] > this.elev0[i] + 0.01) c++; return c; }
+
+  /** Net outflow direction per cell, for flow arrows. */
+  computeFlow(vx: Float32Array, vy: Float32Array) {
+    for (let i = 0; i < vx.length; i++) { vx[i] = this.fR[i] - this.fL[i]; vy[i] = this.fD[i] - this.fU[i]; }
   }
 
   drainAt(i: number) { return this.drains.find(d => d.i === i); }
@@ -96,7 +132,7 @@ export class Sim {
         gw[i] += inf / POROSITY;
       }
       gw[i] += (base - gw[i]) * 0.002 * dt;
-      if (gw[i] > elev[i]) { water[i] += (gw[i] - elev[i]) * POROSITY; gw[i] = elev[i]; }
+      if (gw[i] > elev[i]) { const e = (gw[i] - elev[i]) * POROSITY; water[i] += e; this.stats.emerged += e; gw[i] = elev[i]; }
     }
 
     // Virtual pipes: outflow to lower neighbors proportional to head difference
