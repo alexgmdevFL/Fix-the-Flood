@@ -90,7 +90,7 @@ def tides(lat, lon):
     cands = []
     for s in STATIONS:
         d = haversine(lat, lon, s['lat'], s['lng'])
-        if d < 80000:
+        if d < 130000:
             cands.append((d, s))
     cands.sort(key=lambda c: c[0])
     for d, s in cands[:12]:

@@ -11,6 +11,8 @@ Netlify: build `npm run build`, publish `dist` (set in `netlify.toml`).
 
 Assets: `blender/build_assets.py` builds every model procedurally, bakes ambient occlusion, and exports Draco .glb files to `public/assets`. Rebuild with `pip install bpy` then `python3 blender/build_assets.py` (or `blender -b -P blender/build_assets.py`).
 
+Real places: `python3 tools/fetch_places.py` downloads USGS elevation (AWS Terrain Tiles), OpenStreetMap streets and buildings, NOAA tide datums and NOAA Atlas 14 rainfall into `public/places/`; `node --experimental-strip-types tools/calibrate.ts` picks each place's storms. Map data (c) OpenStreetMap contributors.
+
 See `TODO.md` for priorities.
 
 ```

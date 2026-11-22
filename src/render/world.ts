@@ -9,7 +9,15 @@ import { makeWaterMaterial, makeSeaNormals } from './water.ts';
 import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.ts';
 import { computeWatershed, type Watershed } from '../sim/watershed.ts';
 
-export const VS = 0.35; // world units per foot of elevation (vertical exaggeration)
+// World units per foot of elevation. Exaggerated so a few feet of relief reads on screen; set per map so
+// places with more relief (Cedar Key, Key West) do not turn into cliffs.
+export let VS = 0.35;
+function verticalScale(elev: Float32Array, open: Uint8Array) {
+  const land = Array.from(elev).filter((_, i) => !open[i]).sort((a, b) => a - b);
+  if (!land.length) return 0.35;
+  const relief = land[Math.floor(land.length * 0.95)] - land[Math.floor(land.length * 0.05)];
+  return Math.min(0.35, 2.2 / Math.max(1, relief));
+}
 export type Lens = 'surface' | 'elevation' | 'groundwater' | 'flow' | 'tide' | 'watershed' | 'pipes';
 export type Zoom = 'house' | 'street' | 'watershed' | 'region';
 const MAP_LENSES: Lens[] = ['elevation', 'groundwater', 'tide'];
@@ -108,6 +116,7 @@ export class World {
   constructor(parent: HTMLElement, sim: Sim, level: Level) {
     this.sim = sim;
     this.level = level;
+    VS = verticalScale(sim.elev, sim.open);
     this.n = sim.n;
     const n = this.n;
     this.renderer = new THREE.WebGLRenderer({ antialias: !LOW, powerPreference: 'high-performance' });

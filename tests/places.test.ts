@@ -29,11 +29,11 @@ for (const { id } of index) {
   });
   test(`${id}: storm 1 floods homes when nothing is built`, () => { assert.ok(storm1(js).stats.worst > 0); });
   test(`${id}: storm 1 can be won with drains and pumps`, () => {
-    const won = [[6, 1], [10, 2], [14, 3], [20, 5]].some(([k, p]) => storm1(js, s => {
-      const sol = autoSolution(placeData(js), k, p);
-      for (const i of sol.drains) s.drains.push({ i, valve: false, flow: 0 });
-      for (const i of sol.pumps) s.pumps.push({ i, flow: 0 });
-    }).stats.worst === 0);
-    assert.ok(won);
+    const sol = js.calib?.solution ?? autoSolution(placeData(js), 10, 2);
+    const s = storm1(js, x => {
+      for (const i of sol.drains) x.drains.push({ i, valve: false, flow: 0 });
+      for (const i of sol.pumps) x.pumps.push({ i, flow: 0 });
+    });
+    assert.equal(s.stats.worst, 0);
   });
 }

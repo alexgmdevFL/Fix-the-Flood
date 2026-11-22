@@ -9,7 +9,7 @@ export interface PlaceJSON {
   roads: { w: number; pts: [number, number][] }[]; bigBuildings: number[][];
   tide: { station: string; stationName: string; distMi: number; mhhw: number; msl: number; hat: number; hatEstimated: boolean };
   rain: { ari: number[]; h1: number[]; h2: number[]; h3: number[]; h24: number[] };
-  calib?: { s1: number; s2: number; s3: number; sep: number; floorOffset: number; solvable: boolean };
+  calib?: { s1: number; s2: number; s3: number; sep: number; floorOffset: number; solvable: boolean; solution?: { drains: number[]; pumps: number[] } };
 }
 
 export const DEFAULT_FLOOR = 0.8; // ft from ground to finished floor (a typical slab)
@@ -20,7 +20,7 @@ function despike(raw: number[], open: number[], n: number) {
   const out = Float32Array.from(raw);
   const land = raw.filter((_, i) => !open[i]).sort((a, b) => a - b);
   if (!land.length) return out;
-  const cap = land[Math.floor(land.length * 0.95)] + 3;
+  const cap = land[Math.floor(land.length * 0.9)] + 2;
   for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
     const i = y * n + x;
     if (open[i]) continue;
@@ -31,7 +31,7 @@ function despike(raw: number[], open: number[], n: number) {
     }
     nb.sort((a, b) => a - b);
     const med = nb[Math.floor(nb.length / 2)];
-    out[i] = Math.min(raw[i] > med + 2.5 ? med : raw[i], cap);
+    out[i] = Math.min(raw[i] > med + 2 ? med : raw[i], cap);
   }
   return out;
 }
