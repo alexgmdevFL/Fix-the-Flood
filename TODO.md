@@ -10,8 +10,7 @@
 ## Next
 - Level 2 polish: sealed manhole lids tool, septic tutorial step, nutrient load to the river.
 - Milestone 5: power (substations flood, pumps lose power, backup generators).
-- Small dark lump at the near edge of the Miami Beach map (likely the scenery border); investigate.
-- Storm surge storms, so surge-driven places (Davis Islands, Fort Myers Beach, Old Naples, Pensacola Beach, Jacksonville Riverside) become playable.
+- Storm surge storms, so surge-driven places (Cedar Key, Daytona Beach Shores, Fort Myers Beach, Pensacola Beach) become playable.
 - More real places; NOAA gauges here lack published HAT, so king tides are estimated as MHHW + 0.75 ft.
 - Water: double the sim resolution (96x96) for smoother puddles and shorelines.
 
@@ -22,6 +21,7 @@
 <details>
 <summary>Recently Done</summary>
 
+- Real-place visuals fixed: water surface over open water inside maps, flat shorelines at ponds and banks (no sloped sheets), bridges and rooftops removed from ground data, no lanes or buildings drawn on water, building facades with windows and stucco colors. 9 playable places.
 - Real places look cleaner: larger buildings are 3D extrusions of their real OpenStreetMap outlines; street tiles no longer paint gray blobs (roads come only from real paths).
 - Real Florida places: tools/fetch_places.py bakes USGS elevation, OpenStreetMap streets and homes, NOAA tide datums and NOAA Atlas 14 rainfall; tools/calibrate.ts picks each place's storms from real return periods. 8 playable places plus the practice town; place picker and Random place in More; data credits shown.
 - Tap info, style A: info card anchored to the tapped spot (soil column, key numbers, reason, actions right there). Alerts pinned on the map: flooding, backflow, septic failing, sewer overflow. Inspect is the default tool. Hint strip has colored label chips and pops when it changes.

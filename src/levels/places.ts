@@ -51,6 +51,7 @@ function flattenBuildings(raw: number[], js: PlaceJSON) {
   const high = land.length ? land[Math.floor(land.length * 0.75)] + 5 : Infinity;
   for (let i = 0; i < n * n; i++) if (!js.open[i] && raw[i] > high) under[i] = 1;
   for (const b of js.bigBuildings) {
+    if (!b.pts) continue; // older files stored boxes instead of outlines
     const xs = b.pts.map(p => p[0]), ys = b.pts.map(p => p[1]);
     for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(n - 1, Math.ceil(Math.max(...ys))); y++)
       for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(n - 1, Math.ceil(Math.max(...xs))); x++) {

@@ -922,7 +922,21 @@ export class World {
     const wc = this.water.geometry.attributes.aConc as THREE.BufferAttribute;
     for (let i = 0; i < n * n; i++) {
       const d = v.water[i]; // open water inside the grid is drawn here; the sea frame covers only outside
-      wp.setY(i, d > 0.004 ? (sim.elev[i] + d) * VS : sim.elev[i] * VS - 0.03);
+      let y = d > 0.004 ? (sim.elev[i] + d) * VS : sim.elev[i] * VS - 0.03;
+      if (d <= 0.004) {
+        // Dry point beside water: hold it at the neighbor's water level so the surface stays flat and meets the
+        // bank, instead of a sloped sheet climbing up the bank
+        const x = i % n, yy = (i / n) | 0;
+        let lvl = -Infinity;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const X = x + dx, Y = yy + dy;
+          if (X < 0 || Y < 0 || X >= n || Y >= n) continue;
+          const j = Y * n + X;
+          if (v.water[j] > 0.004) lvl = Math.max(lvl, sim.elev[j] + v.water[j]);
+        }
+        if (lvl > -Infinity) y = Math.min(y, lvl * VS);
+      }
+      wp.setY(i, y);
       wd.setX(i, d);
       if (v.vx && v.vy) wf.setXY(i, v.vx[i], v.vy[i]);
       wc.setX(i, v.conc ? v.conc[i] : 0);
