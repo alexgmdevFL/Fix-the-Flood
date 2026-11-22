@@ -625,36 +625,54 @@ export class World {
     this.batch('streetlight', lights);
   }
 
-  /** Shops, condos and other larger buildings, extruded from their real outlines. */
+  /** Shops, condos and other larger buildings, extruded from their real outlines, with window rows and stucco colors. */
   private buildBigBuildings() {
-    const geos: THREE.BufferGeometry[] = [];
-    const wall = new THREE.Color(0xe9e5dc), roof = new THREE.Color(0xa9aeb3), tmp = new THREE.Color();
-    const r = rng(17);
+    const STUCCO = [0xf1ebe1, 0xf4dccb, 0xdde8ef, 0xf0e3ba, 0xe4e1dc, 0xd9ecdf];
+    const walls: THREE.BufferGeometry[] = [], roofs: THREE.BufferGeometry[] = [];
+    const r = rng(17), col = new THREE.Color();
+    const slice = (geo: THREE.BufferGeometry, start: number, count: number, color: THREE.Color) => {
+      const out = new THREE.BufferGeometry();
+      for (const name of ['position', 'normal', 'uv']) {
+        const at = geo.attributes[name] as THREE.BufferAttribute;
+        out.setAttribute(name, new THREE.BufferAttribute((at.array as Float32Array).slice(start * at.itemSize, (start + count) * at.itemSize), at.itemSize));
+      }
+      const c = new Float32Array(count * 3);
+      for (let k = 0; k < count; k++) c.set([color.r, color.g, color.b], k * 3);
+      out.setAttribute('color', new THREE.BufferAttribute(c, 3));
+      return out;
+    };
     for (const b of this.level.bigBuildings) {
       if (b.pts.length < 3) continue;
       const w = b.pts.map(([x, y]) => this.gridToWorld(x, y));
       const shape = new THREE.Shape(w.map(p => new THREE.Vector2(p.x, -p.z)));
       const h = Math.min(2.6, Math.max(0.9, 0.7 + b.a / 2500)) * (0.85 + r() * 0.3);
-      const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+      let geo: THREE.BufferGeometry = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2);
       geo.translate(0, Math.min(...w.map(p => p.y)) - 0.05, 0);
-      geo.deleteAttribute('uv');
-      const nrm = geo.attributes.normal as THREE.BufferAttribute;
-      const col = new Float32Array(nrm.count * 3);
-      const tint = 0.92 + r() * 0.12;
-      for (let k = 0; k < nrm.count; k++) {
-        tmp.copy(nrm.getY(k) > 0.5 ? roof : wall).multiplyScalar(nrm.getY(k) > 0.5 ? 1 : tint);
-        col.set([tmp.r, tmp.g, tmp.b], k * 3);
+      if (geo.index) geo = geo.toNonIndexed();
+      const wallCol = col.setHex(STUCCO[Math.floor(r() * STUCCO.length)]).clone();
+      const roofCol = new THREE.Color(0x9da3a8).multiplyScalar(0.9 + r() * 0.15);
+      for (const g of geo.groups) {
+        if (g.materialIndex === 0) roofs.push(slice(geo, g.start, g.count, roofCol));
+        else walls.push(slice(geo, g.start, g.count, wallCol));
       }
-      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      geos.push(geo.index ? geo.toNonIndexed() : geo);
     }
-    if (!geos.length) return;
-    const merged = mergeGeometries(geos);
-    if (!merged) return;
-    const mesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 }));
-    mesh.castShadow = mesh.receiveShadow = true;
-    this.scene.add(mesh);
+    if (!walls.length) return;
+    // Window rows: a small repeating tile, scaled in world units by the extrude UVs
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 64;
+    const c2 = cv.getContext('2d')!;
+    c2.fillStyle = '#ffffff'; c2.fillRect(0, 0, 64, 64);
+    c2.fillStyle = '#5f7688'; c2.fillRect(14, 20, 36, 24);
+    c2.fillStyle = '#8aa2b3'; c2.fillRect(14, 20, 36, 5);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1.8, 2.6);
+    tex.anisotropy = 4;
+    const wallMesh = new THREE.Mesh(mergeGeometries(walls)!, new THREE.MeshStandardMaterial({ map: tex, vertexColors: true, roughness: 0.8 }));
+    const roofMesh = new THREE.Mesh(mergeGeometries(roofs)!, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
+    for (const m of [wallMesh, roofMesh]) { m.castShadow = m.receiveShadow = true; this.scene.add(m); }
   }
 
   private buildOutfall() {
@@ -903,7 +921,7 @@ export class World {
     const wf = this.water.geometry.attributes.aFlow as THREE.BufferAttribute;
     const wc = this.water.geometry.attributes.aConc as THREE.BufferAttribute;
     for (let i = 0; i < n * n; i++) {
-      const d = sim.open[i] ? 0 : v.water[i];
+      const d = v.water[i]; // open water inside the grid is drawn here; the sea frame covers only outside
       wp.setY(i, d > 0.004 ? (sim.elev[i] + d) * VS : sim.elev[i] * VS - 0.03);
       wd.setX(i, d);
       if (v.vx && v.vy) wf.setXY(i, v.vx[i], v.vy[i]);

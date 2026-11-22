@@ -181,7 +181,7 @@ def build(pid, name, county, water, lat0, lon0):
     kx = 111320 * math.cos(math.radians(lat0))
     to_m = lambda la, lo: ((lo - lon0) * kx, (lat0 - la) * 110540)  # x east, y south, meters from the given center
 
-    roads, bldgs, waters, beaches = [], [], [], []
+    roads, bldgs, waters, beaches, bridges = [], [], [], [], []
     for el in els:
         t = el.get('tags', {})
         geoms = []
@@ -192,7 +192,10 @@ def build(pid, name, county, water, lat0, lon0):
         for g in geoms:
             pts = [to_m(p['lat'], p['lon']) for p in g]
             if 'highway' in t and t['highway'] in ROAD_W:
-                roads.append((ROAD_W[t['highway']], pts))
+                if t.get('bridge', 'no') != 'no':
+                    bridges.append((ROAD_W[t['highway']], pts))  # elevated decks are not ground
+                elif t.get('tunnel', 'no') == 'no':
+                    roads.append((ROAD_W[t['highway']], pts))
             elif 'building' in t and len(pts) > 2:
                 bldgs.append(pts)
             elif t.get('natural') == 'water' and len(pts) > 2:
@@ -258,6 +261,17 @@ def build(pid, name, county, water, lat0, lon0):
     beach_m = mask(beaches)
 
     # Open (tidal) water: low or mapped water, connected to the grid edge
+    # The elevation tiles include bridge decks. Under a bridge, use the low ground (or water) around it instead.
+    bridge_m = mask(None, [(w + 1.5, p) for w, p in bridges])
+    under = [bridge_m.getpixel((i % N, i // N)) > 60 for i in range(N * N)]
+    fixed = elev[:]
+    for i in range(N * N):
+        if not under[i]:
+            continue
+        x, y = i % N, i // N
+        nb = sorted(elev[yy * N + xx] for yy in range(max(0, y - 4), min(N, y + 5)) for xx in range(max(0, x - 4), min(N, x + 5)) if not under[yy * N + xx])
+        fixed[i] = nb[len(nb) // 5] if nb else min(elev[i], 0.0)
+    elev = fixed
     wet = [elev[i] < 0.6 or water_m.getpixel((i % N, i // N)) > 128 for i in range(N * N)]
     open_ = [0] * (N * N)
     stack = [i for i in range(N * N) if wet[i] and (i % N in (0, N - 1) or i // N in (0, N - 1))]
@@ -286,7 +300,7 @@ def build(pid, name, county, water, lat0, lon0):
         if not 60 < a < 500: continue
         cx = sum(p[0] for p in b) / len(b); cy = sum(p[1] for p in b) / len(b)
         gx, gy = g((cx, cy))
-        if 1 <= gx < N - 2 and 1 <= gy < N - 2:
+        if 1 <= gx < N - 2 and 1 <= gy < N - 2 and not open_[int(round(gy)) * N + int(round(gx))]:
             cand.append((math.hypot(gx - N / 2, gy - N / 2), gx, gy))
     cand.sort()
     for _, gx, gy in cand:
@@ -307,7 +321,9 @@ def build(pid, name, county, water, lat0, lon0):
         if a >= 500:
             pts = [tuple(round(v, 2) for v in g(q)) for q in b]
             xs, ys = zip(*pts)
-            if max(xs) > 0 and min(xs) < N - 1 and max(ys) > 0 and min(ys) < N - 1:
+            mx_, my_ = int(round(sum(xs) / len(xs))), int(round(sum(ys) / len(ys)))
+            on_water = 0 <= mx_ < N and 0 <= my_ < N and (open_[my_ * N + mx_] or surface[my_ * N + mx_] == 7)
+            if max(xs) > 0 and min(xs) < N - 1 and max(ys) > 0 and min(ys) < N - 1 and not on_water:
                 big.append({'a': round(a), 'pts': pts})
                 big_polys.append(b)
     big.sort(key=lambda o: -o['a'])

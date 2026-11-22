@@ -17,28 +17,73 @@ export const DEFAULT_FLOOR = 0.8; // ft from ground to finished floor (a typical
 /** The elevation tiles sometimes catch buildings, bridges or tree canopy. Pull any cell that sticks up far above
  * its neighbors back to the local typical height, and cap everything just above the area's normal high ground. */
 function despike(raw: number[], open: number[], n: number) {
-  const out = Float32Array.from(raw);
+  let cur = Float32Array.from(raw);
   const land = raw.filter((_, i) => !open[i]).sort((a, b) => a - b);
-  if (!land.length) return out;
-  const cap = land[Math.floor(land.length * 0.9)] + 2;
-  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-    const i = y * n + x;
-    if (open[i]) continue;
-    const nb: number[] = [];
-    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-      const X = x + dx, Y = y + dy;
-      if (X >= 0 && Y >= 0 && X < n && Y < n && !open[Y * n + X]) nb.push(raw[Y * n + X]);
+  if (!land.length) return cur;
+  const cap = land[Math.floor(land.length * 0.85)] + 2;
+  // Two passes catch clusters (garages, bridge ramps) that a single pass misses
+  for (let pass = 0; pass < 2; pass++) {
+    const out = Float32Array.from(cur);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const i = y * n + x;
+      if (open[i]) continue;
+      const nb: number[] = [];
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+        const X = x + dx, Y = y + dy;
+        if (X >= 0 && Y >= 0 && X < n && Y < n && !open[Y * n + X]) nb.push(cur[Y * n + X]);
+      }
+      nb.sort((a, b) => a - b);
+      const med = nb[Math.floor(nb.length / 2)];
+      out[i] = Math.min(cur[i] > med + 1.5 ? med : cur[i], cap);
     }
-    nb.sort((a, b) => a - b);
-    const med = nb[Math.floor(nb.length / 2)];
-    out[i] = Math.min(raw[i] > med + 2 ? med : raw[i], cap);
+    cur = out;
+  }
+  return cur;
+}
+
+/** Elevation tiles sometimes include rooftops (parking garages, condos). Under mapped buildings, use the
+ * typical height of the open land around them instead. */
+function flattenBuildings(raw: number[], js: PlaceJSON) {
+  const n = js.n, out = raw.slice(), under = new Uint8Array(n * n);
+  for (const cells of js.houses) for (const c of cells) under[c] = 1;
+  // Structures missing from the map data (garages, convention halls) show up as plateaus well above the neighborhood
+  const land = raw.filter((_, i) => !js.open[i]).sort((a, b) => a - b);
+  const high = land.length ? land[Math.floor(land.length * 0.75)] + 5 : Infinity;
+  for (let i = 0; i < n * n; i++) if (!js.open[i] && raw[i] > high) under[i] = 1;
+  for (const b of js.bigBuildings) {
+    const xs = b.pts.map(p => p[0]), ys = b.pts.map(p => p[1]);
+    for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(n - 1, Math.ceil(Math.max(...ys))); y++)
+      for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(n - 1, Math.ceil(Math.max(...xs))); x++) {
+        let inside = false;
+        for (let i = 0, j = b.pts.length - 1; i < b.pts.length; j = i++) {
+          const [xi, yi] = b.pts[i], [xj, yj] = b.pts[j];
+          if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+        }
+        if (inside) under[y * n + x] = 1;
+      }
+  }
+  for (let i = 0; i < n * n; i++) {
+    if (!under[i] || js.open[i]) continue;
+    const x = i % n, y = Math.floor(i / n), nb: number[] = [];
+    for (let R = 3; R <= 9 && nb.length < 6; R += 3) {
+      nb.length = 0;
+      for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+        const X = x + dx, Y = y + dy, j = Y * n + X;
+        if (X >= 0 && Y >= 0 && X < n && Y < n && !under[j] && !js.open[j]) nb.push(raw[j]);
+      }
+    }
+    if (nb.length) { nb.sort((a, b) => a - b); out[i] = nb[Math.floor(nb.length / 2)]; }
   }
   return out;
 }
 
+const CLEAN = new WeakMap<PlaceJSON, Float32Array>(); // cleaned elevation, computed once per place
+
 export function placeData(js: PlaceJSON, floorOffset = js.calib?.floorOffset ?? DEFAULT_FLOOR): LevelData {
   const n = js.n;
-  const elev = despike(js.elev, js.open, n);
+  let clean = CLEAN.get(js);
+  if (!clean) { clean = despike(flattenBuildings(js.elev, js), js.open, n); CLEAN.set(js, clean); }
+  const elev = clean.slice();
   const houses: House[] = js.houses.map(cells => {
     let mx = -99, mn = 99;
     for (const c of cells) { mx = Math.max(mx, elev[c]); mn = Math.min(mn, elev[c]); }
@@ -105,7 +150,8 @@ export function placeLevel(js: PlaceJSON): Level {
   const houses = d.houses.length;
   return {
     ...d, ...lay, id: js.id, name: js.name, county: js.county, real: true,
-    roads: js.roads, bigBuildings: js.bigBuildings, labels, scenarios: placeScenarios(js),
+    roads: js.roads.filter(r => r.pts.filter(([x, y]) => { const X = Math.round(x), Y = Math.round(y); return X >= 0 && Y >= 0 && X < n && Y < n && d.open[Y * n + X]; }).length * 2 < r.pts.length), // no lanes drawn across open water (docks)
+    bigBuildings: js.bigBuildings, labels, scenarios: placeScenarios(js),
     regionNote: `${js.name} in ${js.county} County. This ${Math.round(n * js.cellMeters)} meter square is built from real elevation, streets and ${houses} real homes, with tides from the NOAA gauge at ${js.tide.stationName}.`,
   };
 }
