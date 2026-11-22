@@ -90,9 +90,12 @@ export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, r
     pts.forEach(([x, y], j) => { if (j) g.lineTo(X(x), X(y)); else g.moveTo(X(x), X(y)); });
     g.stroke();
   };
-  for (const r of roads) if (r.w >= 1.4) stroke(r.pts, r.w + 0.9, '#cfcbc1');
-  for (const r of roads) stroke(r.pts, r.w + 0.14, '#3d4044');
-  for (const r of roads) stroke(r.pts, r.w, r.w >= 1.4 ? '#505357' : '#66696d');
+  // Service lanes (driveways, parking aisles, alleys) are thin concrete, not full streets
+  for (const r of roads) if (r.w < 1.4) stroke(r.pts, 0.5, '#c2bdb2');
+  const streets = roads.filter(r => r.w >= 1.4);
+  for (const r of streets) stroke(r.pts, r.w + 0.55, '#cfcbc1');
+  for (const r of streets) stroke(r.pts, r.w + 0.1, '#3d4044');
+  for (const r of streets) stroke(r.pts, r.w, '#505357');
   for (let t = 0; t < 16000; t++) {
     const px = r() * SIZE, py = r() * SIZE;
     if (cellAt(px, py) !== S.Pavement) continue;
