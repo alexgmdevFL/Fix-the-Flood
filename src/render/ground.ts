@@ -31,7 +31,7 @@ function rng(seed: number) {
   return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 
-export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, roads: Road[] = [], big: number[][] = []): THREE.CanvasTexture {
+export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, roads: Road[] = [], big: { pts: [number, number][] }[] = []): THREE.CanvasTexture {
   const { m, elev, surf } = p;
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
@@ -53,7 +53,7 @@ export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, r
       else if (s === S.Sand) c = e < 1.7 ? [200, 184, 142] : [230, 216, 172];
       else if (s === S.Grass) c = [104 * j, 146 * j, 70 * j];
       else if (s === S.Wall) c = [180, 176, 166];
-      else c = [88, 91, 96];
+      else c = [104 * j, 146 * j, 70 * j]; // streets are drawn from their real paths below, so the tile itself stays lawn
       g.fillStyle = rgb(c);
       g.fillRect((x - 0.5) * k, (y - 0.5) * k, k + 1, k + 1);
     }
@@ -102,7 +102,9 @@ export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, r
   for (const r of roads) if (r.w >= 2.3) { stroke(r.pts, 0.06, '#e5c04a'); } else if (r.w >= 2) stroke(r.pts, 0.06, '#e8e8e4', [0.5, 0.5]);
   g.setLineDash([]);
   // Larger buildings (shops, condos) as flat roofs
-  for (const [x0, y0, x1, y1] of big) { rect(x0, y0, x1, y1, '#8b8f93'); rect(x0 + 0.15, y0 + 0.15, x1 - 0.15, y1 - 0.15, '#a4a8ac'); }
+  // Concrete pads under larger buildings (the buildings themselves are 3D)
+  g.fillStyle = '#c4c0b8';
+  for (const b of big) { g.beginPath(); b.pts.forEach(([x, y], j) => { if (j) g.lineTo(X(x), X(y)); else g.moveTo(X(x), X(y)); }); g.closePath(); g.fill(); }
 
   for (const e of extras) rect(e.x0, e.y0, e.x1, e.y1, e.color);
 

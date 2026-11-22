@@ -134,13 +134,17 @@ def rain(lat, lon):
 # ---------------------------------------------------------------- osm
 def osm(s, w, n, e):
     q = f'[out:json][timeout:90];(way["highway"]({s},{w},{n},{e});way["building"]({s},{w},{n},{e});way["natural"~"water|beach"]({s},{w},{n},{e});relation["natural"="water"]({s},{w},{n},{e}););out geom;'
+    api = f'https://api.openstreetmap.org/api/0.6/map?bbox={w},{s},{e},{n}'
+    api_cached = os.path.exists(os.path.join(CACHE, hashlib.md5(repr((api, None)).encode()).hexdigest() + '.txt'))
     try:
+        if api_cached:
+            raise RuntimeError('using the cached OpenStreetMap API copy')
         return json.loads(curl('https://overpass.private.coffee/api/interpreter', data=q, tries=2))['elements']
     except Exception as ex:
         print('   overpass failed, using the OpenStreetMap API instead:', ex)
     # Fallback: the main OSM API returns raw XML for a bounding box
     import xml.etree.ElementTree as ET
-    root = ET.fromstring(curl(f'https://api.openstreetmap.org/api/0.6/map?bbox={w},{s},{e},{n}'))
+    root = ET.fromstring(curl(api))
     nodes = {nd.get('id'): (float(nd.get('lat')), float(nd.get('lon'))) for nd in root.iter('node')}
     out = []
     for way in root.iter('way'):
@@ -296,12 +300,22 @@ def build(pid, name, county, water, lat0, lon0):
         for c in cells: surface[c] = 4
         if len(houses) >= 36: break
 
-    big = []
+    # Larger buildings keep their real outline (grid coords); their roofs shed water like pavement
+    big, big_polys = [], []
     for b in bldgs:
-        if poly_area_m2(b) >= 500:
-            xs, ys = zip(*map(g, b))
+        a = poly_area_m2(b)
+        if a >= 500:
+            pts = [tuple(round(v, 2) for v in g(q)) for q in b]
+            xs, ys = zip(*pts)
             if max(xs) > 0 and min(xs) < N - 1 and max(ys) > 0 and min(ys) < N - 1:
-                big.append([round(min(xs), 2), round(min(ys), 2), round(max(xs), 2), round(max(ys), 2)])
+                big.append({'a': round(a), 'pts': pts})
+                big_polys.append(b)
+    big.sort(key=lambda o: -o['a'])
+    big = big[:120]
+    bm = mask(big_polys)
+    for i in range(N * N):
+        if not open_[i] and surface[i] not in (4, 7) and bm.getpixel((i % N, i // N)) > 128:
+            surface[i] = 3
 
     road_lines = []
     for w, p in roads:

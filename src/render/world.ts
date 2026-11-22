@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { S, LIFT_CAP, type Sim } from '../sim/grid.ts';
 import type { Level } from '../levels/types.ts';
 import { makeWaterMaterial, makeSeaNormals } from './water.ts';
@@ -242,6 +243,7 @@ export class World {
     this.scene.add(this.water);
 
     this.buildOutfall();
+    this.buildBigBuildings();
     this.scene.add(this.props);
     this.scene.add(this.sewageProps);
 
@@ -621,6 +623,38 @@ export class World {
     this.batch('shrub', shrubs);
 
     this.batch('streetlight', lights);
+  }
+
+  /** Shops, condos and other larger buildings, extruded from their real outlines. */
+  private buildBigBuildings() {
+    const geos: THREE.BufferGeometry[] = [];
+    const wall = new THREE.Color(0xe9e5dc), roof = new THREE.Color(0xa9aeb3), tmp = new THREE.Color();
+    const r = rng(17);
+    for (const b of this.level.bigBuildings) {
+      if (b.pts.length < 3) continue;
+      const w = b.pts.map(([x, y]) => this.gridToWorld(x, y));
+      const shape = new THREE.Shape(w.map(p => new THREE.Vector2(p.x, -p.z)));
+      const h = Math.min(2.6, Math.max(0.9, 0.7 + b.a / 2500)) * (0.85 + r() * 0.3);
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+      geo.rotateX(-Math.PI / 2);
+      geo.translate(0, Math.min(...w.map(p => p.y)) - 0.05, 0);
+      geo.deleteAttribute('uv');
+      const nrm = geo.attributes.normal as THREE.BufferAttribute;
+      const col = new Float32Array(nrm.count * 3);
+      const tint = 0.92 + r() * 0.12;
+      for (let k = 0; k < nrm.count; k++) {
+        tmp.copy(nrm.getY(k) > 0.5 ? roof : wall).multiplyScalar(nrm.getY(k) > 0.5 ? 1 : tint);
+        col.set([tmp.r, tmp.g, tmp.b], k * 3);
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      geos.push(geo.index ? geo.toNonIndexed() : geo);
+    }
+    if (!geos.length) return;
+    const merged = mergeGeometries(geos);
+    if (!merged) return;
+    const mesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 }));
+    mesh.castShadow = mesh.receiveShadow = true;
+    this.scene.add(mesh);
   }
 
   private buildOutfall() {

@@ -6,7 +6,7 @@ import type { Level, Scenario, MapLabel } from './types.ts';
 export interface PlaceJSON {
   id: string; name: string; county: string; waterName: string; lat: number; lon: number;
   n: number; cellMeters: number; elev: number[]; surface: number[]; open: number[]; houses: number[][];
-  roads: { w: number; pts: [number, number][] }[]; bigBuildings: number[][];
+  roads: { w: number; pts: [number, number][] }[]; bigBuildings: { a: number; pts: [number, number][] }[];
   tide: { station: string; stationName: string; distMi: number; mhhw: number; msl: number; hat: number; hatEstimated: boolean };
   rain: { ari: number[]; h1: number[]; h2: number[]; h3: number[]; h24: number[] };
   calib?: { s1: number; s2: number; s3: number; sep: number; floorOffset: number; solvable: boolean; solution?: { drains: number[]; pumps: number[] } };

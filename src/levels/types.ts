@@ -22,7 +22,7 @@ export interface Level extends LevelData {
   county: string;
   real: boolean;
   roads: Road[];
-  bigBuildings: number[][]; // [x0, y0, x1, y1] grid boxes for larger buildings
+  bigBuildings: { a: number; pts: [number, number][] }[]; // larger buildings: footprint area (m2) and outline in grid coords
   facing: number[]; // yaw per house; the model's front is +Z (toward +gy)
   outfallCell: number;
   outfallDir: [number, number]; // grid direction from the outfall cell toward open water
