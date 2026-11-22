@@ -5,7 +5,6 @@ export interface TutCtx {
 }
 interface Step { text: string; next?: string; target?: string; until?: (c: TutCtx) => boolean; onEnter?: (c: TutCtx) => void }
 const KEY = 'hw-tutorial-done';
-const STREET_SPOTS = [12 * 48 + 19, 31 * 48 + 19, 18 * 48 + 21];
 
 export class Tutorial {
   private k = -1;
@@ -13,15 +12,15 @@ export class Tutorial {
   private arrow: HTMLDivElement;
   private marked: Element | null = null;
   private steps: Step[] = [
-    { text: 'Welcome to Halifax Shores, a neighborhood on Volusia County\'s barrier island. The Halifax River is on one side, the Atlantic Ocean on the other.', next: 'Next' },
+    { text: 'Welcome to Halifax Shores, a practice town on a Florida barrier island. After this, the game takes you to real places across Florida, built from real elevation, tide and rainfall data.', next: 'Next' },
     { text: 'Your job: keep water out of every house. Money is no object. The challenge is how water behaves.', next: 'Next' },
     { text: 'Tap Play to start the rain, then watch where it goes.', target: '#play', until: c => c.playing && c.time > 25 },
     { text: 'The street is filling up. Water flows downhill, and the street is the lowest ground. Tap the Drain tool.', target: '[data-tool=drain]', until: c => c.tool === 'drain', onEnter: c => { c.pause(); c.selectTool('inspect'); } },
-    { text: 'Now tap the glowing rings on the street to place 3 drains.', until: c => c.drains >= 3, onEnter: c => c.hint(STREET_SPOTS) },
+    { text: 'Now tap the glowing rings on the street to place 3 drains.', until: c => c.drains >= 3, onEnter: c => c.hint(this.spots) },
     { text: 'Each drain pipes water to the river. Tap Play and let the storm finish.', target: '#play', until: c => c.finished, onEnter: c => c.hint([]) },
   ];
 
-  constructor(private el: HTMLElement) {
+  constructor(private el: HTMLElement, private spots: number[]) {
     this.arrow = document.createElement('div');
     this.arrow.id = 'tutArrow';
     this.arrow.textContent = 'Tap here ▼';

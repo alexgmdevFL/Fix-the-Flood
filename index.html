@@ -6,12 +6,12 @@
   <meta name="theme-color" content="#145a7a" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-  <title>High Water: Halifax Shores</title>
+  <title>High Water: Florida Flooding</title>
 </head>
 <body>
   <div id="app"></div>
   <div id="top" class="hud">
-    <div class="titlebar"><h1>High Water</h1><span id="mode"></span></div>
+    <div class="titlebar"><h1 id="placeName">High Water</h1><span id="mode"></span></div>
     <div id="stats"></div>
   </div>
   <div id="zoom" class="hud">
@@ -22,7 +22,8 @@
   </div>
   <div id="note" class="hud"></div>
   <div id="panel" class="hud collapsed">
-    <div class="place">Halifax Shores, Volusia County</div>
+    <label>Place <select id="placeSel"></select></label>
+    <div class="row" style="margin-top:6px"><button id="randomPlace">Random place</button></div>
     <div id="concept"></div>
     <div class="row"><button id="s1">Storm 1</button><button id="s2">Storm 2</button><button id="s3">Storm 3</button><button id="s4">Level 2</button></div>
     <label>Rain <span id="rainV"></span><input id="rain" type="range" min="0" max="6" step="0.1" value="0" /></label>

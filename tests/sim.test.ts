@@ -56,7 +56,7 @@ function runSeptic(setup: (s: Sim) => void = () => {}) {
   while (s.time < sc.duration) { s.rain = sc.rain(s.time); s.tide = sc.tide(s.time); s.step(0.25); }
   return s;
 }
-const sewerAll = (s: Sim) => { s.connectSewer(0); s.connectSewer(8); s.connectSewer(16); };
+const sewerAll = (s: Sim) => { for (const h of s.houses) h.sewer = true; };
 test('level 2: septic tanks fail in the wet season', () => { assert.ok(runSeptic().stats.septicFails > 0); });
 test('level 2: sewer alone overflows when the street floods', () => { const s = runSeptic(sewerAll); assert.equal(s.stats.septicFails, 0); assert.ok(s.stats.overflow > 0); });
 test('level 2: sewer plus drains and pumps keeps sewage out', () => { const s = runSeptic(x => { sewerAll(x); six(x); two(x); }); assert.equal(s.stats.sewage, 0); assert.equal(s.stats.worst, 0); });

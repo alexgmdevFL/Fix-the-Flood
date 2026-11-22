@@ -1,6 +1,7 @@
 import './style.css';
 import { Sim, S, SURFACE_NAMES, type Earthwork } from './sim/grid.ts';
-import { buildLevel1, SCENARIOS, N, type Scenario } from './levels/level1.ts';
+import type { Scenario } from './levels/types.ts';
+import { loadLevel, PLACE_INDEX } from './levels/load.ts';
 import { World, type Lens, type View, type Zoom } from './render/world.ts';
 import { liveNote, resultNote } from './ui/feedback.ts';
 import { Tutorial } from './ui/tutorial.ts';
@@ -8,12 +9,17 @@ import { Sound } from './ui/audio.ts';
 import { Callout, Pins, type Info, type Act, type Alert } from './ui/callout.ts';
 import { LIFT_CAP, SEPTIC_SEP } from './sim/grid.ts';
 
+const level = await loadLevel();
+const SCENARIOS = level.scenarios;
+const N = level.n;
+const WATER = level.waterName ?? 'the river';
+
 type Tool = 'inspect' | 'drain' | 'valve' | 'pump' | 'sewer' | 'swale' | 'pond' | 'wall' | 'raise' | 'remove';
 interface Frame { t: number; water: Float32Array; conc: Float32Array; vx: Float32Array; vy: Float32Array; tide: number; rain: number }
 
 const TIPS: Record<Tool, string> = {
   inspect: 'Inspect: tap any spot to see its height, water and groundwater.',
-  drain: 'Storm drain: collects water and pipes it to the outfall in the Halifax River, or to a pond if one is close.',
+  drain: `Storm drain: collects water and pipes it to the outfall in ${WATER}, or to a pond if one is close.`,
   valve: 'Check valve: a flap that lets water out but stops the river pushing back in.',
   pump: 'Pump: lifts water into the river, even when the tide is high.',
   sewer: 'Sewer: tap a house to connect its whole row to the city sewer. Septic tanks retire, but floodwater leaking in can overload the lift station.',
@@ -28,14 +34,14 @@ const LENS_TIPS: Partial<Record<Lens, string>> = {
   groundwater: 'Groundwater: blue means the soil is full and rain cannot soak in. Tan means room to absorb.',
   flow: 'Flow arrows: which way water is moving right now.',
   tide: 'High tide: red ground sits below the current tide. Only the seawall and check valves keep the river out.',
-  watershed: 'Watershed: orange land drains toward the Halifax River, green toward the ocean. Blue is the bowl behind the seawall where water pools if nothing drains it.',
+  watershed: 'Watershed: orange and green tint show which way the land drains. Blue is the bowl behind the seawall where water pools if nothing drains it.',
   pipes: 'Pipes: underground drain lines to the outfall. Cyan is flowing out, red is running backward.',
 };
 
-const sim = new Sim(buildLevel1());
+const sim = new Sim(level);
 const sound = new Sound();
-const tutorial = new Tutorial(document.getElementById('tut')!);
-const world = new World(document.getElementById('app')!, sim);
+const tutorial = new Tutorial(document.getElementById('tut')!, level.suggest);
+const world = new World(document.getElementById('app')!, sim, level);
 const callout = new Callout(world, i => buildInfo(i));
 const pins = new Pins(world, cell => { callout.show(cell); world.showCursor(cell); });
 world.onLightning = () => sound.thunder();
@@ -59,7 +65,7 @@ function say(msg: string, label = 'TIP') { toast = msg; toastLabel = label; toas
 
 // Hint strip: a colored label chip, and a quick pop whenever the text changes
 let noteText = '';
-const NOTE_COLORS: Record<string, string> = { TIP: '#145a7a', REPLAY: '#5b4a9a', TOOL: '#145a7a', 'WET SEASON': '#2b6f8f', TIDE: '#c77700' };
+const NOTE_COLORS: Record<string, string> = { PLACE: '#1b7a3d', TIP: '#145a7a', REPLAY: '#5b4a9a', TOOL: '#145a7a', 'WET SEASON': '#2b6f8f', TIDE: '#c77700' };
 function setNote(text: string, label: string) {
   const el = $('note');
   if (text === noteText) return;
@@ -146,7 +152,7 @@ function buildInfo(i: number): Info | null {
   return {
     title: SURFACE_NAMES[surf], badge: sim.open[i] ? 'Open water' : w > 0.05 ? 'Flooded' : 'Dry', k: w > 0.05 ? C.warn : C.tip, col,
     rows: [['Height', `${e.toFixed(2)} ft`, ''], ['Water on top', inch(w), w > 0.1 ? 'warn' : ''], ['Dry soil', dryIn < 0.03 ? 'none' : inch(dryIn), dryIn < 0.25 ? 'warn' : ''], ['Could pool', pool > 0 ? inch(pool) : 'no', pool > 0 ? 'bad' : 'ok']],
-    why: sim.open[i] ? 'The Halifax River and the ocean rise and fall with the tide.' : pool > 0.5 ? 'This spot sits in the low bowl behind the seawall, so water from all around ends up here.' : pool > 0 ? 'A shallow low spot. Water collects here before it can run off.' : 'Water runs off this spot toward lower ground.',
+    why: sim.open[i] ? `${WATER[0].toUpperCase() + WATER.slice(1)} rises and falls with the tide.` : pool > 0.5 ? 'This spot sits in the low bowl behind the seawall, so water from all around ends up here.' : pool > 0 ? 'A shallow low spot. Water collects here before it can run off.' : 'Water runs off this spot toward lower ground.',
     acts,
   };
 }
@@ -205,10 +211,11 @@ function finish() {
   if (s.septic && sim.stats.septicFails > 0) st = Math.min(st, 1);
   if (s.septic && sim.stats.overflow > 0.01) st = Math.min(st, 2);
   const best = loadStars();
-  best[s.id] = Math.max(best[s.id] ?? 0, st);
+  const key = (x: Scenario) => `${level.id}:${x.id}`;
+  best[key(s)] = Math.max(best[key(s)] ?? 0, st);
   saveStars(best);
   const next = SCENARIOS[SCENARIOS.indexOf(s) + 1];
-  const total = SCENARIOS.reduce((a, x) => a + (best[x.id] ?? 0), 0);
+  const total = SCENARIOS.reduce((a, x) => a + (best[key(x)] ?? 0), 0);
   const note = resultNote(sim);
   const canNext = next && st >= 1;
   $('modal').innerHTML = `
@@ -217,7 +224,7 @@ function finish() {
     <div class="grade ${w > 0 ? 'bad' : 'good'}">${w > 0 ? `${w.toFixed(1)} in of water inside the worst house` : 'All floors dry'}</div>
     <p>${note}</p>
     <p class="fact"><b>Did you know?</b> ${s.fact}</p>
-    ${s.id === 'storm3' && st >= 1 ? `<div class="complete">Level 1 complete: ${SCENARIOS.slice(0, 3).reduce((a, x) => a + (best[x.id] ?? 0), 0)} of 9 stars. Halifax Shores made it through heavy rain, a king tide and the wet season. Next up: sewage.</div>` : ''}
+    ${s.id === 'storm3' && st >= 1 ? `<div class="complete">Level 1 complete: ${SCENARIOS.slice(0, 3).reduce((a, x) => a + (best[key(x)] ?? 0), 0)} of 9 stars. ${level.name} made it through heavy rain, a king tide and the wet season. Next up: sewage.</div>` : ''}
     ${s.id === 'septic' && st >= 1 ? `<div class="complete">Level 2 complete. Total: ${total} of ${SCENARIOS.length * 3} stars.</div>` : ''}
     <div class="row">
       <button id="watch" class="${w > 0 ? 'primary' : ''}">Watch replay</button>
@@ -291,7 +298,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach(b => {
     document.querySelectorAll('[data-zoom]').forEach(o => o.classList.toggle('on', o === b));
     if (z === 'watershed') setLens('watershed');
     else if (world.lens === 'watershed') setLens('surface');
-    if (z === 'region') say('Region: Halifax Shores is one block on Volusia County\'s long, low barrier island, between the Halifax River and the Atlantic.');
+    if (z === 'region') say(level.regionNote, 'PLACE');
   };
 });
 const setPanel = (c: boolean) => { $('panel').classList.toggle('collapsed', c); $('panelToggle').textContent = c ? 'More' : 'Close'; };
@@ -444,6 +451,14 @@ startScenario(SCENARIOS[0]);
 playing = false;
 updatePlay();
 say('Storm 1. Press Play to start the rain, then place drains where water collects.');
-if (!Tutorial.done()) tutorial.start();
+if (!Tutorial.done() && level.id === 'halifax') tutorial.start();
+
+// Header and place picker
+$('placeName').textContent = level.name;
+const placeSel = $<HTMLSelectElement>('placeSel');
+placeSel.innerHTML = [{ id: 'halifax', name: 'Halifax Shores (practice town)', county: 'Volusia' }, ...PLACE_INDEX].map(p => `<option value="${p.id}">${p.name}${p.id === 'halifax' ? '' : `, ${p.county} County`}</option>`).join('');
+placeSel.value = level.id;
+placeSel.onchange = () => { location.search = `?place=${placeSel.value}`; };
+$('randomPlace').onclick = () => { const others = PLACE_INDEX.filter(p => p.id !== level.id); if (others.length) location.search = `?place=${others[Math.floor(Math.random() * others.length)].id}`; };
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');

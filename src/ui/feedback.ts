@@ -21,7 +21,7 @@ export function resultNote(sim: Sim): string {
   }
   if (s.worst <= 0) parts.push('Every floor stayed dry.');
   else if (s.backflow > 1 && !sim.drains.some(d => d.valve))
-    parts.push('Your drains ran backward. At high tide the Halifax River sat above the outfall pipe, so river water came up through the street drains. A check valve stops that.');
+    parts.push(`Your drains ran backward. At high tide ${sim.waterName} sat above the outfall pipe, so its water came up through the street drains. A check valve stops that.`);
   else if (s.blockedMin > 20 && sim.pumps.length === 0)
     parts.push('Check valves stopped the backflow, but with the outfall underwater the rain had nowhere to go. A pump can lift water over the high tide.');
   else if (sim.gwOffset > 0)
@@ -33,6 +33,6 @@ export function resultNote(sim: Sim): string {
   sim.surface.forEach((s, i) => { if (s === 7 && sim.water[i] > 0.25) standing++; });
   if (standing > 0) parts.push('Your ponds still hold standing water. Within a week that is mosquito habitat.');
   if (s.worst > 0 && sim.raisedCells() > 0) parts.push('Raised roads stay drier, but they push water toward the houses beside them.');
-  if (sim.pumps.length > 0) parts.push('Trade-off: every gallon pumped went into the Halifax River, along with whatever was on the street.');
+  if (sim.pumps.length > 0) parts.push(`Trade-off: every gallon pumped went into ${sim.waterName}, along with whatever was on the street.`);
   return parts.join(' ');
 }

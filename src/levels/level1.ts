@@ -1,6 +1,9 @@
 // Level 1: "One Street, One Storm". Halifax Shores, a fictional block on Volusia County's barrier island.
 // Halifax River (the Intracoastal lagoon) to the west, Atlantic Ocean to the east.
 import { S, type LevelData, type House } from '../sim/grid.ts';
+import type { Level, Scenario } from './types.ts';
+import { finalize } from './finalize.ts';
+export type { Scenario } from './types.ts';
 
 export const N = 48;
 export const OUTFALL_ROW = 23;
@@ -49,18 +52,6 @@ export function buildLevel1(): LevelData {
   return { n: N, elev, surface, open, houses, outfallElev: 1.2, liftCell: 26 * N + 22 };
 }
 
-export interface Scenario {
-  id: string;
-  title: string;
-  concept: string;
-  duration: number; // minutes
-  rain: (t: number) => number; // in/hr
-  tide: (t: number) => number; // ft
-  gwOffset: number;
-  fact: string; // real Volusia County context shown after the storm
-  septic?: boolean; // Level 2: houses start on septic tanks
-}
-
 export const SCENARIOS: Scenario[] = [
   {
     id: 'storm1', title: 'Storm 1: Heavy rain',
@@ -88,3 +79,30 @@ export const SCENARIOS: Scenario[] = [
     fact: 'Florida has more than 2 million septic tanks. Many counties, including Volusia, are paying to move neighborhoods from septic to sewer to protect rivers and lagoons from sewage and the algae blooms it feeds.',
   },
 ];
+
+/** Halifax Shores, the fictional practice town used for the tutorial. */
+export function halifaxLevel(): Level {
+  const d = buildLevel1();
+  const lay = finalize(d);
+  return {
+    ...d, ...lay, id: 'halifax', name: 'Halifax Shores', county: 'Volusia', real: false,
+    tideNormal: 1.0, gw0: 1.4, waterName: 'the Halifax River',
+    outfallCell: OUTFALL_ROW * N + 7, outfallDir: [-1, 0],
+    suggest: [12 * N + 19, 31 * N + 19, 18 * N + 21],
+    roads: [{ w: 3, pts: [[20, -20], [20, N + 20]] }, { w: 3, pts: [[6.6, 23], [36.5, 23]] }],
+    bigBuildings: [],
+    labels: [
+      { text: 'Halifax River', gx: 1, gy: 12, y: 1, min: 50 },
+      { text: 'Atlantic Ocean', gx: 47, gy: 32, y: 1, min: 50 },
+      { text: 'Seawall', gx: 6, gy: 36, y: 1.2, min: 50, max: 110 },
+      { text: 'Outfall pipe', gx: 5, gy: OUTFALL_ROW + 1.6, y: 0.4, min: 50, max: 110 },
+      { text: 'Dune', gx: 38.5, gy: 12, y: 2.1, min: 50, max: 110 },
+      { text: 'Main St', gx: 20, gy: 8, y: 0.8, min: 50, max: 110 },
+      { text: 'Your neighborhood', gx: 24, gy: -3, y: 1.5, min: 90 },
+      { text: 'Practice town (fictional)', gx: 24, gy: -40, y: 1, min: 90 },
+      { text: 'If nothing drained, water pools here', gx: 20, gy: 30, y: 1.2, min: 0, max: 999, lens: 'watershed' },
+    ],
+    scenarios: SCENARIOS,
+    regionNote: 'Halifax Shores is a made-up practice town modeled on Volusia County\'s barrier island. After the tutorial, the game moves to real Florida places.',
+  };
+}

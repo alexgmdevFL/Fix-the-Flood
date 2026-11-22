@@ -1,6 +1,7 @@
 // Terrain padding and the painted ground texture (grass, sand, roads, markings, pads, driveways).
 import * as THREE from 'three';
 import { S, type Sim } from '../sim/grid.ts';
+import type { Road } from '../levels/types.ts';
 
 export const PAD = 16; // extra cells of scenery around the sim grid
 export interface Padded { m: number; elev: Float32Array; surf: Uint8Array }
@@ -30,7 +31,7 @@ function rng(seed: number) {
   return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 
-export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048): THREE.CanvasTexture {
+export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, roads: Road[] = [], big: number[][] = []): THREE.CanvasTexture {
   const { m, elev, surf } = p;
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
@@ -80,48 +81,28 @@ export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048): 
     g.fillRect(px, py, sz, sz * (s === S.Grass ? 2 : 1));
   }
 
-  const Y0 = -PAD - 1, Y1 = n + PAD;
-  // Seawall cap and shell-rock alley
-  rect(5.5, Y0, 6.5, Y1, '#bdb8ad');
-  for (let y = Y0; y < Y1; y += 2) rect(5.5, y, 6.5, y + 0.04, '#97928a');
-  rect(27.6, Y0, 28.4, Y1, '#d4cbb5');
-
-  // Streets
-  const asphalt = '#505357';
-  rect(18.5, Y0, 21.5, Y1, asphalt);
-  rect(6.5, 21.5, 36.5, 24.5, asphalt);
-  for (let t = 0; t < 14000; t++) {
-    const onMain = r() < 0.6;
-    const gx = onMain ? 18.5 + r() * 3 : 6.5 + r() * 30, gy = onMain ? Y0 + r() * (Y1 - Y0) : 21.5 + r() * 3;
-    g.fillStyle = r() < 0.5 ? 'rgba(30,32,35,0.35)' : 'rgba(140,140,140,0.25)';
-    g.fillRect(X(gx), X(gy), SIZE / 1024, SIZE / 1024);
+  // Roads from their real paths: sidewalk, curb shadow, asphalt, then a center line on bigger roads
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  const stroke = (pts: [number, number][], width: number, color: string, dash?: number[]) => {
+    g.strokeStyle = color; g.lineWidth = width * k;
+    g.setLineDash(dash ? dash.map(d => d * k) : []);
+    g.beginPath();
+    pts.forEach(([x, y], j) => { if (j) g.lineTo(X(x), X(y)); else g.moveTo(X(x), X(y)); });
+    g.stroke();
+  };
+  for (const r of roads) if (r.w >= 1.4) stroke(r.pts, r.w + 0.9, '#cfcbc1');
+  for (const r of roads) stroke(r.pts, r.w + 0.14, '#3d4044');
+  for (const r of roads) stroke(r.pts, r.w, r.w >= 1.4 ? '#505357' : '#66696d');
+  for (let t = 0; t < 16000; t++) {
+    const px = r() * SIZE, py = r() * SIZE;
+    if (cellAt(px, py) !== S.Pavement) continue;
+    g.fillStyle = r() < 0.5 ? 'rgba(30,32,35,0.3)' : 'rgba(150,150,150,0.2)';
+    g.fillRect(px, py, SIZE / 1024, SIZE / 1024);
   }
-  // Sidewalks and curbs
-  const walk = '#cfcbc1', curb = '#e2ded5';
-  for (const [a, b] of [[Y0, 21.5], [24.5, Y1]]) {
-    rect(18.0, a, 18.5, b, walk); rect(21.5, a, 22.0, b, walk);
-    rect(18.44, a, 18.52, b, curb); rect(21.48, a, 21.56, b, curb);
-    for (let y = a; y < b; y += 0.5) { rect(18.0, y, 18.44, y + 0.02, '#b3afa6'); rect(21.56, y, 22.0, y + 0.02, '#b3afa6'); }
-  }
-  for (const [a, b] of [[6.5, 18.5], [21.5, 36.5]]) {
-    rect(a, 21.0, b, 21.5, walk); rect(a, 24.5, b, 25.0, walk);
-    rect(a, 21.44, b, 21.52, curb); rect(a, 24.48, b, 24.56, curb);
-  }
-  // Markings
-  for (const [a, b] of [[Y0, 21.3], [24.7, Y1]]) {
-    rect(19.9, a, 19.96, b, '#e5c04a'); rect(20.04, a, 20.1, b, '#e5c04a');
-    rect(18.72, a, 18.76, b, '#e8e8e4'); rect(21.24, a, 21.28, b, '#e8e8e4');
-  }
-  for (let x = 7; x < 36; x += 1) if (x < 17.5 || x > 22) rect(x, 22.97, x + 0.5, 23.03, '#e8e8e4');
-  for (let t = 0; t < 9; t++) {
-    const o = 21.7 + t * 0.3;
-    rect(17.85, o, 18.45, o + 0.15, '#ecece8'); rect(21.55, o, 22.15, o + 0.15, '#ecece8');
-    const q = 18.7 + t * 0.3;
-    rect(q, 20.75, q + 0.15, 21.4, '#ecece8'); rect(q, 24.6, q + 0.15, 25.25, '#ecece8');
-  }
-  // Park paths
-  g.strokeStyle = '#d6c7a0'; g.lineWidth = 0.3 * k;
-  for (const cy of [10, 35]) { g.beginPath(); g.ellipse(X(9.5), X(cy), 2.6 * k, 4 * k, 0, 0, 6.283); g.stroke(); }
+  for (const r of roads) if (r.w >= 2.3) { stroke(r.pts, 0.06, '#e5c04a'); } else if (r.w >= 2) stroke(r.pts, 0.06, '#e8e8e4', [0.5, 0.5]);
+  g.setLineDash([]);
+  // Larger buildings (shops, condos) as flat roofs
+  for (const [x0, y0, x1, y1] of big) { rect(x0, y0, x1, y1, '#8b8f93'); rect(x0 + 0.15, y0 + 0.15, x1 - 0.15, y1 - 0.15, '#a4a8ac'); }
 
   for (const e of extras) rect(e.x0, e.y0, e.x1, e.y1, e.color);
 

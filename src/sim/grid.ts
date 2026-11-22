@@ -36,6 +36,9 @@ export interface LevelData {
   houses: House[];
   outfallElev: number;
   liftCell: number;
+  tideNormal?: number; // usual high tide (ft); the water table is set relative to it
+  gw0?: number; // water table at usual high tide (ft)
+  waterName?: string; // the water body the outfall drains to
 }
 
 export interface Stats { backflow: number; drained: number; pumped: number; blockedMin: number; worst: number; emerged: number; sewage: number; overflow: number; septicFails: number }
@@ -58,6 +61,9 @@ export class Sim {
   outfallElev: number;
   liftCell: number;
   septicOn = false; // Level 2: houses on septic tanks
+  tideNormal: number;
+  gw0: number;
+  waterName: string;
   liftLoad = 0; // current sewer flow into the lift station, ft*cell per minute
   rain = 0; // in/hr
   tide = 1; // ft
@@ -75,6 +81,9 @@ export class Sim {
     this.houses = l.houses;
     this.outfallElev = l.outfallElev;
     this.liftCell = l.liftCell;
+    this.tideNormal = l.tideNormal ?? 1.0;
+    this.gw0 = l.gw0 ?? 1.4;
+    this.waterName = l.waterName ?? 'the river';
     const N = l.n * l.n;
     this.water = new Float32Array(N);
     this.conc = new Float32Array(N);
@@ -85,7 +94,7 @@ export class Sim {
     this.reset();
   }
 
-  gwBase() { return 0.9 + 0.5 * this.tide + this.gwOffset; }
+  gwBase() { return this.gw0 + 0.5 * (this.tide - this.tideNormal) + this.gwOffset; }
 
   reset() {
     this.water.fill(0);
@@ -135,11 +144,16 @@ export class Sim {
     if (load > cap) { this.addSewage(this.liftCell, load - cap); this.stats.overflow += load - cap; }
   }
 
-  /** Connect every house in the same row (same street side) to the sewer. Returns how many changed. */
+  /** Connect a house and its neighbors on the block (within 7 tiles) to the sewer. Returns how many changed. */
   connectSewer(house: number) {
-    const col = this.houses[house].cells[0] % this.n;
+    const n = this.n, c0 = this.houses[house].cells[0];
+    const x0 = c0 % n, y0 = Math.floor(c0 / n);
     let k = 0;
-    for (const h of this.houses) if (h.cells[0] % this.n === col && !h.sewer) { h.sewer = true; h.septicFail = false; k++; }
+    for (const h of this.houses) {
+      const c = h.cells[0];
+      if (h.sewer || Math.max(Math.abs((c % n) - x0), Math.abs(Math.floor(c / n) - y0)) > 7) continue;
+      h.sewer = true; h.septicFail = false; k++;
+    }
     return k;
   }
 

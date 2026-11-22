@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { S, LIFT_CAP, type Sim } from '../sim/grid.ts';
-import { OUTFALL_ROW } from '../levels/level1.ts';
+import type { Level } from '../levels/types.ts';
 import { makeWaterMaterial, makeSeaNormals } from './water.ts';
 import { PAD, padTerrain, paintGround, type Padded, type Rect } from './ground.ts';
 import { computeWatershed, type Watershed } from '../sim/watershed.ts';
@@ -102,8 +102,12 @@ export class World {
   private hints = new THREE.Group();
   private seaNormal: THREE.DataTexture;
 
-  constructor(parent: HTMLElement, sim: Sim) {
+  level: Level;
+  outfallVel = new THREE.Vector3(-2.2, 0.6, 0);
+
+  constructor(parent: HTMLElement, sim: Sim, level: Level) {
     this.sim = sim;
+    this.level = level;
     this.n = sim.n;
     const n = this.n;
     this.renderer = new THREE.WebGLRenderer({ antialias: !LOW, powerPreference: 'high-performance' });
@@ -170,7 +174,7 @@ export class World {
     tg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(m * m * 3), 3));
     tg.setAttribute('aWet', new THREE.BufferAttribute(new Float32Array(m * m), 1));
     this.wet = new Float32Array(n * n);
-    this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras(), LOW ? 1024 : 2048), roughness: 0.95, vertexColors: true });
+    this.groundMat = new THREE.MeshStandardMaterial({ map: paintGround(this.pad, n, this.groundExtras(), LOW ? 1024 : 2048, level.roads, level.bigBuildings), roughness: 0.95, vertexColors: true });
     // Rain makes the ground darker and glossy (wet asphalt reflects the sky)
     this.groundMat.onBeforeCompile = sh => {
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aWet;\nvarying float vWet;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWet = aWet;');
@@ -196,21 +200,10 @@ export class World {
       p.receiveShadow = true;
       this.sea.add(p);
     };
-    const bayEdge = 6 - n / 2 + 0.5 - 0.1, oceanEdge = 40 - n / 2 + 0.5;
-    void half;
-    seaRect(-F, bayEdge, -F, F);
-    seaRect(oceanEdge, F, -F, F);
+    // A frame of sea around the playable grid; it shows wherever the scenery border dips below the tide
+    seaRect(-F, -half, -F, F); seaRect(half, F, -F, F);
+    seaRect(-half, half, -F, -half); seaRect(-half, half, half, F);
     this.scene.add(this.sea);
-
-    // Rest of the barrier island beyond the scenery border, seen from the region zoom
-    const landMat = new THREE.MeshStandardMaterial({ color: 0x86a866, roughness: 1 });
-    const mid = (bayEdge + oceanEdge) / 2, wide = oceanEdge - bayEdge, edge = m / 2 - 0.5;
-    for (const sgn of [-1, 1]) {
-      const p = new THREE.Mesh(new THREE.PlaneGeometry(wide, F), landMat);
-      p.rotation.x = -Math.PI / 2;
-      p.position.set(mid, 2.3 * VS, sgn * (edge + F / 2 - 0.5));
-      this.scene.add(p);
-    }
 
     // Outline of the playable neighborhood, shown when zoomed out
     const h0 = n / 2;
@@ -299,15 +292,7 @@ export class World {
       document.body.appendChild(el);
       this.labels.push({ el, pos: new THREE.Vector3(gx - n / 2 + 0.5, y, gy - n / 2 + 0.5), min, max, lens });
     };
-    label('Halifax River', 1, 12, 1, 50);
-    label('Atlantic Ocean', 47, 32, 1, 50);
-    label('Seawall', 6, 36, 3.4 * VS, 50, 110);
-    label('Outfall pipe', 5, OUTFALL_ROW + 1.6, 1.2 * VS, 50, 110);
-    label('Dune', 38.5, 12, 6 * VS, 50, 110);
-    label('Main St', 20, 8, 2.2 * VS, 50, 110);
-    label('Your neighborhood', 24, -3, 1.5, 90);
-    label('Volusia County barrier island', 24, -40, 1, 90);
-    label('If nothing drained, water pools here', 20, 30, 3.4 * VS, 0, 999, 'watershed');
+    for (const l of level.labels) label(l.text, l.gx, l.gy, l.y, l.min, l.max ?? 999, l.lens as Lens | undefined);
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -326,27 +311,28 @@ export class World {
       const idx = counts[type] ?? 0;
       counts[type] = idx + 1;
       this.houseFlooded.push(false);
-      return { type, idx, gx, gy, rot: gx < 20 ? Math.PI / 2 : -Math.PI / 2, color: new THREE.Color(HOUSE_COLS[(k * 3) % HOUSE_COLS.length]), car: r() > 0.3 };
+      return { type, idx, gx, gy, rot: this.level.facing[k] ?? 0, color: new THREE.Color(HOUSE_COLS[(k * 3) % HOUSE_COLS.length]), car: r() > 0.3 };
     });
   }
-
-  private streetEdge(gx: number) { return gx < 20 ? 18.0 : gx < 27 ? 22.0 : 28.4; }
 
   private groundExtras(): Rect[] {
     const out: Rect[] = [];
     const r = rng(9);
-    for (const s of this.slots) {
+    this.slots.forEach((s, k) => {
       out.push({ x0: s.gx - 1.05, y0: s.gy - 1.05, x1: s.gx + 1.05, y1: s.gy + 1.05, color: '#b9b3a6' });
       const [ox, oz] = rotXZ(CAR_SPOT[s.type][0], CAR_SPOT[s.type][1], s.rot);
-      const cx = s.gx + ox, cy = s.gy + oz, e = this.streetEdge(s.gx);
-      out.push({ x0: Math.min(cx - 0.35, e), y0: cy - 0.28, x1: Math.max(cx + 0.35, e), y1: cy + 0.28, color: '#cbc5b8' });
+      const cx = s.gx + ox, cy = s.gy + oz;
+      // Driveway from the car spot out to the street, along the way the house faces
+      const m = this.sim.houses[k].manhole, mx = m % this.n, my = Math.floor(m / this.n);
+      if (Math.abs(Math.sin(s.rot)) > 0.5) out.push({ x0: Math.min(cx - 0.35, mx), y0: cy - 0.28, x1: Math.max(cx + 0.35, mx), y1: cy + 0.28, color: '#cbc5b8' });
+      else out.push({ x0: cx - 0.28, y0: Math.min(cy - 0.35, my), x1: cx + 0.28, y1: Math.max(cy + 0.35, my), color: '#cbc5b8' });
       if (r() < 0.5) {
         const [bx, bz] = rotXZ(-0.2, -1.35, s.rot);
         const px = s.gx + bx, py = s.gy + bz;
         out.push({ x0: px - 0.5, y0: py - 0.38, x1: px + 0.5, y1: py + 0.38, color: '#e9e5dc' });
         out.push({ x0: px - 0.38, y0: py - 0.26, x1: px + 0.38, y1: py + 0.26, color: '#46b8d0' });
       }
-    }
+    });
     return out;
   }
 
@@ -585,18 +571,39 @@ export class World {
     // Palms: street rows plus scattered across yards, park, dune and the scenery border
     const palms: [THREE.Matrix4[], THREE.Matrix4[]] = [[], []];
     const addPalm = (gx: number, gy: number) => palms[r() < 0.5 ? 0 : 1].push(mat(this.gridToWorld(gx, gy), r() * 6.28, 0.8 + r() * 0.45, (r() - 0.5) * 0.12));
-    for (let y = -PAD + 1; y < this.n + PAD - 1; y += 4) {
-      if (Math.abs(y - 23) < 3) continue;
-      addPalm(17.55, y + 0.5); addPalm(22.45, y + 2.5);
-    }
     const { m, surf, elev } = this.pad;
     const nearHouse = (gx: number, gy: number) => this.slots.some(s => Math.abs(s.gx - gx) < 2.2 && Math.abs(s.gy - gy) < 1.9);
+    const surfAt = (gx: number, gy: number) => surf[Math.min(m - 1, Math.max(0, Math.round(gy + PAD))) * m + Math.min(m - 1, Math.max(0, Math.round(gx + PAD)))];
+    // Walk each road: palms along the verges, streetlights every 8 tiles
+    const lights: THREE.Matrix4[] = [];
+    for (const rd of this.level.roads) {
+      let acc = 0, side = 1;
+      for (let j = 1; j < rd.pts.length; j++) {
+        const [x0, y0] = rd.pts[j - 1], [x1, y1] = rd.pts[j];
+        const len = Math.hypot(x1 - x0, y1 - y0);
+        if (len < 1e-3) continue;
+        const ux = (x1 - x0) / len, uy = (y1 - y0) / len;
+        for (let d = (5 - acc % 5) % 5; d < len; d += 5) {
+          const tot = acc + d, px = x0 + ux * d, py = y0 + uy * d, off = rd.w / 2 + (rd.w >= 1.4 ? 1.1 : 0.7);
+          for (const sg of [1, -1]) {
+            const qx = px - uy * off * sg, qy = py + ux * off * sg;
+            if (rd.w >= 1.4 && surfAt(qx, qy) === S.Grass && !nearHouse(qx, qy) && Math.round(tot / 5) % 2 === (sg > 0 ? 0 : 1)) addPalm(qx, qy);
+          }
+          if (rd.w >= 1.4 && tot % 10 < 5) {
+            side = -side;
+            const lx = px - uy * (rd.w / 2 + 0.5) * side, ly = py + ux * (rd.w / 2 + 0.5) * side;
+            if (surfAt(lx, ly) !== S.Water) lights.push(mat(this.gridToWorld(lx, ly), Math.atan2(px - lx, py - ly))); // lamp arm points at the road
+          }
+        }
+        acc += len;
+      }
+    }
     for (let t = 0; t < 2500 && palms[0].length + palms[1].length < (LOW ? 70 : 150); t++) {
       const x = Math.floor(r() * m), y = Math.floor(r() * m), i = y * m + x;
       const gx = x - PAD + (r() - 0.5) * 0.6, gy = y - PAD + (r() - 0.5) * 0.6;
       const s = surf[i];
       if (!(s === S.Grass || (s === S.Sand && elev[i] > 3))) continue;
-      if (nearHouse(gx, gy) || (gx > 17 && gx < 23) || (gy > 20.5 && gy < 25.5 && gx < 37) || (gx > 27 && gx < 29)) continue;
+      if (nearHouse(gx, gy) || surfAt(gx + 0.6, gy) === S.Pavement || surfAt(gx - 0.6, gy) === S.Pavement || surfAt(gx, gy + 0.6) === S.Pavement || surfAt(gx, gy - 0.6) === S.Pavement) continue;
       if (s === S.Grass && r() < 0.45) { shrubs.push(mat(this.gridToWorld(gx, gy), r() * 6, 0.8 + r() * 0.6)); continue; }
       addPalm(gx, gy);
     }
@@ -604,11 +611,6 @@ export class World {
     this.batch('palm_b', palms[1]);
     this.batch('shrub', shrubs);
 
-    const lights: THREE.Matrix4[] = [];
-    for (let y = -PAD + 2; y < this.n + PAD; y += 8) {
-      lights.push(mat(this.gridToWorld(18.2, y), Math.PI / 2));
-      lights.push(mat(this.gridToWorld(21.8, y + 4), -Math.PI / 2));
-    }
     this.batch('streetlight', lights);
   }
 
@@ -617,11 +619,16 @@ export class World {
     const g = new THREE.CylinderGeometry(0.2, 0.2, 1.2, 16, 1, true);
     g.rotateZ(Math.PI / 2);
     const pipe = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x55585c, metalness: 0.6, roughness: 0.45, side: THREE.DoubleSide }));
-    this.outfallPos.set(6 - n / 2 + 0.5 - 0.6, this.sim.outfallElev * VS, OUTFALL_ROW - n / 2 + 0.5);
+    const [dx, dy] = this.level.outfallDir, c = this.level.outfallCell;
+    void n;
+    this.outfallPos.copy(this.toWorld(c)).add(new THREE.Vector3(dx * 0.6, 0, dy * 0.6));
+    this.outfallPos.y = Math.max(this.sim.outfallElev, this.sim.elev[c] - 1) * VS;
     pipe.position.copy(this.outfallPos);
+    if (dy !== 0) pipe.rotation.y = Math.PI / 2;
     pipe.castShadow = true;
     this.scene.add(pipe);
-    this.outfallPos.x -= 0.6;
+    this.outfallPos.add(new THREE.Vector3(dx * 0.6, 0, dy * 0.6));
+    this.outfallVel.set(dx * 2.2, 0.6, dy * 2.2);
   }
 
   /** Pulsing rings that show the player where to tap (tutorial). */
@@ -708,19 +715,19 @@ export class World {
     }
   }
 
-  /** Underground pipes: drains run along the street to the cross street, then west to the outfall. Pumps push straight west. */
+  /** Underground pipes: drains run to a nearby pond or straight to the outfall; pumps push to the outfall too. */
   private buildPipes() {
     if (this.pipes) { this.scene.remove(this.pipes); this.pipes.geometry.dispose(); }
     const segs: [number, number, number, number, number][] = [];
-    const ox = 6, oy = OUTFALL_ROW;
+    const n = this.n, oc = this.level.outfallCell, ox = oc % n, oy = Math.floor(oc / n);
     this.sim.connectDrains();
     this.sim.drains.forEach((d, k) => {
-      const x = d.i % this.n, y = Math.floor(d.i / this.n);
-      if ((d.to ?? -1) >= 0) { segs.push([x, y, d.to! % this.n, Math.floor(d.to! / this.n), k]); return; }
-      if (y !== oy) segs.push([x, y, x, oy, k]);
-      segs.push([x, oy, ox, oy, k]);
+      const x = d.i % n, y = Math.floor(d.i / n);
+      const to = d.to ?? -1;
+      if (to >= 0) segs.push([x, y, to % n, Math.floor(to / n), k]);
+      else segs.push([x, y, ox, oy, k]);
     });
-    this.sim.pumps.forEach((p, k) => { const x = p.i % this.n, y = Math.floor(p.i / this.n); segs.push([x, y, 5, y, -1 - k]); });
+    this.sim.pumps.forEach((p, k) => segs.push([p.i % n, Math.floor(p.i / n), ox, oy, -1 - k]));
     if (this.sim.septicOn) {
       const lx = this.sim.liftCell % this.n, ly = Math.floor(this.sim.liftCell / this.n);
       for (const h of this.sim.houses) if (h.sewer) segs.push([h.manhole % this.n, Math.floor(h.manhole / this.n), lx, ly, SEWER_PIPE]);
@@ -928,7 +935,7 @@ export class World {
       }
     }
     const outflow = sim.drains.reduce((s, d) => s + Math.max(0, d.flow), 0) + sim.pumps.reduce((s, p) => s + p.flow, 0);
-    if (outflow > 0.05 && Math.random() < Math.min(1, outflow)) this.spawn(this.outfallPos, new THREE.Vector3(-2.2, 0.6, 0), 0.4);
+    if (outflow > 0.05 && Math.random() < Math.min(1, outflow)) this.spawn(this.outfallPos, this.outfallVel, 0.4);
     }
     // Arrows on every other cell where water is moving
     if ((this.lens === 'flow' || this.forceArrows) && v.vx && v.vy) {
