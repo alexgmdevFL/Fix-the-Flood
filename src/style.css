@@ -20,7 +20,10 @@ button.on, button.primary { background: #145a7a; color: #fff; border-color: #145
 #zoom button { min-height: 36px; width: 74px; font-size: 13px; padding: 4px 6px; box-shadow: 0 2px 8px #0002; }
 
 /* Hint strip */
-#note { top: calc(76px + env(safe-area-inset-top)); left: 16px; right: 98px; max-width: 520px; font-size: 14px; line-height: 1.3; background: #102230d0; color: #fff; padding: 8px 12px; border-radius: 10px; pointer-events: none; }
+#note { top: calc(76px + env(safe-area-inset-top)); left: 16px; right: 98px; max-width: 520px; font-size: 14px; line-height: 1.35; background: #fffffff2; color: #14222c; padding: 8px 12px 8px 10px; border-radius: 12px; border-left: 5px solid var(--k, #145a7a); box-shadow: 0 4px 14px #0003; pointer-events: none; display: flex; gap: 8px; align-items: flex-start; }
+#note .nchip { flex: none; font-size: 10.5px; font-weight: 800; letter-spacing: 0.07em; color: #fff; background: var(--k, #145a7a); border-radius: 6px; padding: 3px 7px; margin-top: 1px; }
+#note.pop { animation: notepop 0.35s ease-out; }
+@keyframes notepop { 0% { transform: translateY(-8px); opacity: 0; } 60% { box-shadow: 0 0 0 4px #ffaa0088, 0 4px 14px #0003; } 100% { transform: none; opacity: 1; } }
 #note:empty { display: none; }
 
 /* Bottom: one swipeable tool row, then Play / speed / More */
@@ -73,6 +76,39 @@ body.tutorial #note, body.tutorial #zoom { display: none; }
 @keyframes tutpulse { 0% { box-shadow: 0 0 0 0 rgba(255, 170, 0, 0.9); } 75% { box-shadow: 0 0 0 16px rgba(255, 170, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 170, 0, 0); } }
 #tutArrow { position: fixed; z-index: 6; transform: translate(-50%, -100%); background: #ffaa00; color: #1a1a1a; font-weight: 800; font-size: 15px; padding: 5px 11px; border-radius: 10px; pointer-events: none; white-space: nowrap; box-shadow: 0 4px 12px #0004; animation: tutbob 0.8s ease-in-out infinite alternate; }
 @keyframes tutbob { from { margin-top: 0; } to { margin-top: -8px; } }
+
+/* Info card anchored to the tapped spot */
+#callout { position: fixed; z-index: 4; width: min(280px, calc(100vw - 16px)); background: #fff; border-radius: 14px; box-shadow: 0 10px 30px #0b1a2455; padding: 10px 12px 12px; font-size: 14px; }
+#callout.pop { animation: cpop 0.22s ease-out; }
+@keyframes cpop { from { opacity: 0; transform: translateY(8px) scale(0.96); } to { opacity: 1; transform: none; } }
+#callout::after { content: ""; position: absolute; left: var(--ax, 50%); width: 16px; height: 16px; background: #fff; transform: translateX(-50%) rotate(45deg); }
+#callout.above::after { bottom: -7px; }
+#callout.below::after { top: -7px; }
+#callout .chead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+#callout .ctitle { font-weight: 800; font-size: 16px; }
+#callout .badge { font-size: 10.5px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: #fff; background: var(--k, #145a7a); border-radius: 6px; padding: 3px 7px; }
+#callout .cbody { display: grid; grid-template-columns: 62px 1fr; gap: 10px; align-items: start; }
+#callout .rows { display: grid; gap: 5px; min-width: 0; }
+#callout .row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; border-bottom: 1px dashed #dde5ea; padding-bottom: 3px; }
+#callout .row span { color: #5b6b75; }
+#callout .row b { text-align: right; font-variant-numeric: tabular-nums; }
+#callout .row b.bad { color: #c62828; }
+#callout .row b.warn { color: #c77700; }
+#callout .row b.ok { color: #1b7a3d; }
+#callout .why { margin-top: 8px; font-size: 13px; line-height: 1.35; background: #f2f6f8; border-radius: 8px; padding: 6px 8px; }
+#callout .acts { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+#callout .acts button { min-height: 38px; font-size: 13px; padding: 6px 10px; background: #f4f8fa; }
+#callout .acts button.primary { background: #145a7a; color: #fff; }
+
+/* Alert pins on the map */
+.pin { position: fixed; z-index: 3; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; cursor: pointer; animation: pindrop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
+@keyframes pindrop { from { opacity: 0; margin-top: -16px; } to { opacity: 1; margin-top: 0; } }
+.pin .bub { background: var(--k); color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 0.05em; padding: 5px 8px; border-radius: 8px; box-shadow: 0 4px 12px #0b1a2455; white-space: nowrap; }
+.pin .stem { width: 2px; height: 12px; background: var(--k); }
+.pin .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--k); animation: pinping 1.3s infinite; }
+@keyframes pinping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--k) 70%, transparent); } 100% { box-shadow: 0 0 0 12px transparent; } }
+body.tutorial .pin { display: none !important; }
+body.has-callout #note { display: none; }
 
 .maplabel { position: fixed; left: 0; top: 0; z-index: 1; pointer-events: none; font-size: 14px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px #000c, 0 0 8px #0008; white-space: nowrap; letter-spacing: 0.02em; display: none; }
 .hidden { display: none !important; }

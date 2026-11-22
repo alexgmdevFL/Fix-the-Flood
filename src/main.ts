@@ -5,6 +5,8 @@ import { World, type Lens, type View, type Zoom } from './render/world.ts';
 import { liveNote, resultNote } from './ui/feedback.ts';
 import { Tutorial } from './ui/tutorial.ts';
 import { Sound } from './ui/audio.ts';
+import { Callout, Pins, type Info, type Act, type Alert } from './ui/callout.ts';
+import { LIFT_CAP, SEPTIC_SEP } from './sim/grid.ts';
 
 type Tool = 'inspect' | 'drain' | 'valve' | 'pump' | 'sewer' | 'swale' | 'pond' | 'wall' | 'raise' | 'remove';
 interface Frame { t: number; water: Float32Array; conc: Float32Array; vx: Float32Array; vy: Float32Array; tide: number; rain: number }
@@ -34,13 +36,15 @@ const sim = new Sim(buildLevel1());
 const sound = new Sound();
 const tutorial = new Tutorial(document.getElementById('tut')!);
 const world = new World(document.getElementById('app')!, sim);
+const callout = new Callout(world, i => buildInfo(i));
+const pins = new Pins(world, cell => { callout.show(cell); world.showCursor(cell); });
 world.onLightning = () => sound.thunder();
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 let scenario: Scenario | null = null;
 let playing = false;
 let speed = 1;
-let tool: Tool = 'drain';
+let tool: Tool = 'inspect';
 let toast = '';
 let toastUntil = 0;
 let frames: Frame[] = [];
@@ -50,7 +54,113 @@ const liveVx = new Float32Array(N * N), liveVy = new Float32Array(N * N);
 const rainIn = $<HTMLInputElement>('rain');
 const tideIn = $<HTMLInputElement>('tide');
 
-function say(msg: string) { toast = msg; toastUntil = performance.now() + 4000; }
+let toastLabel = 'TIP';
+function say(msg: string, label = 'TIP') { toast = msg; toastLabel = label; toastUntil = performance.now() + 4000; }
+
+// Hint strip: a colored label chip, and a quick pop whenever the text changes
+let noteText = '';
+const NOTE_COLORS: Record<string, string> = { TIP: '#145a7a', REPLAY: '#5b4a9a', TOOL: '#145a7a', 'WET SEASON': '#2b6f8f', TIDE: '#c77700' };
+function setNote(text: string, label: string) {
+  const el = $('note');
+  if (text === noteText) return;
+  noteText = text;
+  if (!text) { el.innerHTML = ''; return; }
+  el.style.setProperty('--k', NOTE_COLORS[label] ?? '#145a7a');
+  el.innerHTML = `<span class="nchip">${label}</span><span>${text}</span>`;
+  el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+}
+
+// ---------- Info cards (tap with Inspect) and map pins
+const C = { tip: '#145a7a', warn: '#c77700', alert: '#c62828', sewage: '#7a5410', good: '#1b7a3d', muted: '#5b6b75' };
+const inch = (ft: number) => `${(ft * 12).toFixed(ft * 12 < 10 ? 1 : 0)} in`;
+
+function buildInfo(i: number): Info | null {
+  const e = sim.elev[i], w = sim.open[i] ? 0 : sim.water[i], pool = world.watershed.fill[i];
+  const col = { ground: e, water: w, table: Math.min(sim.gw[i], e), pool };
+  const act = (label: string, t: Tool, primary = false): Act => ({ label, primary, run: () => applyAt(i, t) });
+  const dr = sim.drainAt(i), pm = sim.pumpAt(i);
+  if (dr) {
+    const to = dr.to ?? -1;
+    const back = dr.flow < -0.01, out = dr.flow > 0.01;
+    return {
+      title: dr.valve ? 'Drain with check valve' : 'Storm drain', badge: back ? 'Running backward' : out ? 'Draining' : 'Idle', k: back ? C.warn : out ? C.good : C.muted, col,
+      rows: [['Pipes to', to >= 0 ? 'pond' : 'river', ''], ['Pipe end', `${sim.outfallElev.toFixed(1)} ft`, ''], ['River now', `${sim.tide.toFixed(1)} ft`, sim.tide > sim.outfallElev ? 'bad' : 'ok'], ['Water here', inch(w), w > 0.1 ? 'warn' : '']],
+      why: back ? 'The river is higher than the end of the pipe, so river water is pushing up into the street.' : dr.valve && sim.tide > sim.outfallElev ? 'The valve is holding the river out. Rain here waits until the tide drops.' : out ? 'Water is flowing out through the pipe.' : 'Nothing to drain right now.',
+      acts: [...(!dr.valve ? [act('Add check valve', 'valve', true)] : []), act('Swap for pump', 'pump'), act('Remove', 'remove')],
+    };
+  }
+  if (pm) {
+    return {
+      title: 'Pump', badge: pm.flow > 0.02 ? 'Pumping' : 'Idle', k: pm.flow > 0.02 ? C.good : C.muted, col,
+      rows: [['Sends to', 'river', ''], ['At high tide', 'works', 'ok'], ['Water here', inch(w), '']],
+      why: 'Pumps work at any tide, but everything on the street goes into the river with the water.',
+      acts: [act('Remove', 'remove')],
+    };
+  }
+  const hk = sim.houseAt(i);
+  if (hk >= 0) {
+    const h = sim.houses[hk];
+    let lvl = 0;
+    for (const c of h.cells) lvl = Math.max(lvl, sim.elev[c] + sim.water[c]);
+    const gap = h.floor - lvl;
+    const rows: Info['rows'] = [['Floor height', `${h.floor.toFixed(2)} ft`, ''], h.depth > 0 ? ['Water inside', inch(h.depth), 'bad'] : ['Water below floor', inch(Math.max(0, gap)), gap < 0.25 ? 'warn' : 'ok']];
+    if (sim.septicOn) rows.push(['Wastewater', h.sewer ? 'city sewer' : h.septicFail ? 'septic failing' : 'septic working', h.sewer ? 'ok' : h.septicFail ? 'bad' : '']);
+    return {
+      title: world.houseLabel(hk), badge: h.depth > 0 ? 'Flooding' : 'Dry', k: h.depth > 0 ? C.alert : C.good, lift: 1.2,
+      col: { ground: h.ground, water: Math.max(0, lvl - h.ground), table: Math.min(sim.gw[h.cells[0]], h.ground), pool: world.watershed.fill[h.cells[0]], floor: h.floor },
+      rows,
+      why: h.depth > 0 ? 'Water is above the floor. Lower the water outside with drains or pumps.' : gap < 0.25 ? `Only ${inch(Math.max(0, gap))} to spare before water gets inside.` : 'The floor is safely above the water outside.',
+      acts: sim.septicOn && !h.sewer ? [{ label: 'Connect row to sewer', primary: true, run: () => { sim.connectSewer(hk); world.rebuildProps(); } }] : [],
+    };
+  }
+  const septic = sim.septicOn ? sim.houses.findIndex(h => h.septic === i && !h.sewer) : -1;
+  if (septic >= 0) {
+    const h = sim.houses[septic], dry = sim.elev[i] - sim.gw[i];
+    return {
+      title: 'Septic drainfield', badge: h.septicFail ? 'Failing' : 'Working', k: h.septicFail ? C.sewage : C.good, col,
+      rows: [['Needs dry soil', inch(SEPTIC_SEP), ''], ['Dry soil now', inch(Math.max(0, dry)), dry < SEPTIC_SEP ? 'bad' : 'ok'], ['Sewage', sim.conc[i] > 0.05 ? 'in yard' : 'none', sim.conc[i] > 0.05 ? 'bad' : 'ok']],
+      why: h.septicFail ? 'The water table is too close. Wastewater cannot soak in, so it comes up into the yard.' : 'Enough dry soil under it for now.',
+      acts: [{ label: 'Connect row to sewer', primary: true, run: () => { sim.connectSewer(septic); world.rebuildProps(); } }],
+    };
+  }
+  if (sim.septicOn && i === sim.liftCell && sim.houses.some(h => h.sewer)) {
+    const over = sim.liftLoad > LIFT_CAP;
+    return {
+      title: 'Sewer lift station', badge: over ? 'Overflowing' : 'OK', k: over ? C.alert : C.good, col, lift: 0.8,
+      rows: [['Load', `${Math.round((sim.liftLoad / LIFT_CAP) * 100)}%`, over ? 'bad' : 'ok'], ['Homes', String(sim.houses.filter(h => h.sewer).length), '']],
+      why: over ? 'Floodwater is leaking in through manhole lids. Keep the street dry to protect the sewer.' : 'Pumping the neighborhood\'s sewage to the treatment plant.',
+      acts: [],
+    };
+  }
+  const surf = sim.surface[i];
+  const changed = sim.elev[i] !== sim.elev0[i] || surf !== sim.surface0[i];
+  const open = surf === S.Grass || surf === S.Sand;
+  const acts: Act[] = [];
+  if (!sim.open[i] && surf !== S.Wall) {
+    if (changed) acts.push(act('Undo', 'remove'));
+    acts.push(act('Place drain', 'drain', !changed));
+    if (surf === S.Pavement) acts.push(act('Raise road', 'raise'));
+    else if (open) acts.push(act('Dig swale', 'swale'));
+  }
+  const dryIn = Math.max(0, e - sim.gw[i]);
+  return {
+    title: SURFACE_NAMES[surf], badge: sim.open[i] ? 'Open water' : w > 0.05 ? 'Flooded' : 'Dry', k: w > 0.05 ? C.warn : C.tip, col,
+    rows: [['Height', `${e.toFixed(2)} ft`, ''], ['Water on top', inch(w), w > 0.1 ? 'warn' : ''], ['Dry soil', dryIn < 0.03 ? 'none' : inch(dryIn), dryIn < 0.25 ? 'warn' : ''], ['Could pool', pool > 0 ? inch(pool) : 'no', pool > 0 ? 'bad' : 'ok']],
+    why: sim.open[i] ? 'The Halifax River and the ocean rise and fall with the tide.' : pool > 0.5 ? 'This spot sits in the low bowl behind the seawall, so water from all around ends up here.' : pool > 0 ? 'A shallow low spot. Water collects here before it can run off.' : 'Water runs off this spot toward lower ground.',
+    acts,
+  };
+}
+
+function alerts(): Alert[] {
+  const out: Alert[] = [];
+  sim.houses.forEach((h, k) => { if (h.depth > 0.001) out.push({ key: `f${k}`, cell: h.cells[0], label: `FLOODING ${inch(h.depth)}`, k: C.alert, lift: 1.2 }); });
+  sim.drains.forEach(d => { if (d.flow < -0.01) out.push({ key: `b${d.i}`, cell: d.i, label: 'BACKFLOW', k: C.warn }); });
+  if (sim.septicOn) {
+    if (sim.liftLoad > LIFT_CAP) out.push({ key: 'lift', cell: sim.liftCell, label: 'SEWER OVERFLOW', k: C.alert, lift: 0.8 });
+    sim.houses.forEach((h, k) => { if (h.septicFail) out.push({ key: `s${k}`, cell: h.septic, label: 'SEPTIC FAILING', k: C.sewage }); });
+  }
+  return out.slice(0, 8);
+}
 
 function startScenario(s: Scenario) {
   exitReplay();
@@ -124,6 +234,7 @@ function finish() {
 
 function startReplay(note: string) {
   if (frames.length < 2) return;
+  callout.close();
   replay = { k: 0, playing: true, note };
   playing = false;
   updatePlay();
@@ -233,12 +344,21 @@ function applyTool(cx: number, cy: number) {
   if (replay) return;
   const i = world.pick(cx, cy);
   world.showCursor(i);
-  if (i === null) return;
+  if (i === null) { callout.close(); return; }
+  if (tool === 'inspect') { callout.show(i); return; }
+  callout.close();
+  applyAt(i, tool);
+}
+
+/** Use a tool on a cell (from a tap or from an info card button). */
+function applyAt(i: number, t: Tool) {
+  const prev = tool;
+  tool = t;
+  try { applyCell(i); } finally { tool = prev; }
+}
+
+function applyCell(i: number) {
   const surf = sim.surface[i];
-  if (tool === 'inspect') {
-    say(`${SURFACE_NAMES[surf]}. Ground ${sim.elev[i].toFixed(2)} ft, water ${(sim.water[i] * 12).toFixed(1)} in, water table ${sim.gw[i].toFixed(2)} ft (${Math.max(0, (sim.elev[i] - sim.gw[i]) * 12).toFixed(0)} in below ground).${world.watershed.fill[i] > 0 ? ` If nothing drained, water would pool ${(world.watershed.fill[i] * 12).toFixed(0)} in deep here.` : ''}`);
-    return;
-  }
   if (tool === 'sewer') {
     if (!sim.septicOn) { say('No septic tanks in this storm. Open More and pick Level 2: Septic season.'); return; }
     const h = sim.houseAt(i);
@@ -297,11 +417,11 @@ function frame(now: number) {
     const f = frames[replay.k];
     view = { water: f.water, conc: f.conc, vx: f.vx, vy: f.vy, tide: f.tide, rain: f.rain, live: false };
     $('rpTime').textContent = `${Math.floor(f.t / 60)}h ${String(Math.floor(f.t % 60)).padStart(2, '0')}m  tide ${f.tide.toFixed(1)} ft`;
-    $('note').textContent = `Replay. ${replay.note}`;
+    setNote(replay.note, 'REPLAY');
   } else {
     sim.computeFlow(liveVx, liveVy);
     view = { water: sim.water, conc: sim.conc, vx: liveVx, vy: liveVy, tide: sim.tide, rain: sim.rain, live: true };
-    $('note').textContent = now < toastUntil ? toast : liveNote(sim);
+    setNote(now < toastUntil ? toast : liveNote(sim), now < toastUntil ? toastLabel : 'TIP');
   }
   if (scenario) { rainIn.value = String(sim.rain); tideIn.value = String(sim.tide); }
   $('rainV').textContent = `${sim.rain.toFixed(1)} in/hr`;
@@ -313,6 +433,9 @@ function frame(now: number) {
   tutorial.update({ playing, time: sim.time, drains: sim.drains.length, finished: !!scenario && sim.time >= scenario.duration, tool, pause: () => { playing = false; updatePlay(); }, hint: cells => world.setHints(cells), selectTool });
   sound.update(view.rain, view.live ? sim.drains.reduce((a, d) => a + Math.max(0, -d.flow), 0) : 0, view.live && playing && sim.pumps.some(p => p.flow > 0.02));
   world.update(dt, now / 1000, view);
+  callout.update(dt);
+  if (!replay) pins.set(alerts()); else pins.set([]);
+  pins.update();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

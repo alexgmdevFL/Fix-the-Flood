@@ -2,19 +2,12 @@
 import type { Sim } from '../sim/grid.ts';
 
 export function liveNote(sim: Sim): string {
-  if (sim.septicOn) {
-    const LIFT_CAP = 0.12;
-    if (sim.liftLoad > LIFT_CAP) return 'Floodwater is pouring into the sewer through manhole lids. The lift station is overloaded and spilling sewage.';
-    const f = sim.houses.filter(h => h.septicFail).length;
-    if (f > 0) return `${f} septic tank${f > 1 ? 's are' : ' is'} failing: the water table is too close to the drainfield, so sewage is coming up in the yard. Try the Sewer tool on a house.`;
-  }
+  // Problems at a specific spot (flooding, backflow, septic, sewer) are pinned on the map instead.
   if (sim.gwOffset > 0 && sim.time < 40) return 'Wet season: the water table is almost at the surface. Low spots and ponds are already filling from below.';
-  const backflow = sim.drains.some(d => d.flow < -0.01);
-  if (backflow) return `High tide: the Halifax River (${sim.tide.toFixed(1)} ft) is above the outfall pipe (${sim.outfallElev.toFixed(1)} ft). Your drains are running backward.`;
   if (sim.tide > sim.outfallElev && sim.drains.some(d => d.valve && sim.water[d.i] > 0.05) && sim.pumps.length === 0)
     return 'Check valves are holding the river out, but the outfall is underwater, so rain has nowhere to go.';
-  if (sim.houses.some(h => h.depth > 0)) return 'Water is inside homes. Tap a tool, then tap the map to build.';
-  if (sim.drains.length === 0 && sim.rain > 0) return 'Rain flows downhill and collects in the low street. Try placing drains where it pools.';
+  if (sim.drains.length === 0 && sim.rain > 0) return 'Rain flows downhill and collects in the low street. Tap the street to see what you can build there.';
+  if (sim.houses.some(h => h.depth > 0)) return 'Water is getting into homes. Tap a red pin to see why.';
   return '';
 }
 

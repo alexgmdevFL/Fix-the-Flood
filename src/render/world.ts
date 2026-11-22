@@ -361,6 +361,17 @@ export class World {
 
   toWorld(i: number) { return this.gridToWorld(i % this.n, Math.floor(i / this.n)); }
 
+  /** Screen position of a cell (at its water surface plus a lift), or null when off screen. */
+  project(i: number, lift = 0.15) {
+    const v = this.toWorld(i);
+    v.y += (this.sim.open[i] ? 0 : this.sim.water[i]) * VS + lift;
+    v.project(this.camera);
+    if (v.z > 1 || Math.abs(v.x) > 1.05 || Math.abs(v.y) > 1.05) return null;
+    return { x: (v.x + 1) / 2 * window.innerWidth, y: (1 - v.y) / 2 * window.innerHeight };
+  }
+
+  houseLabel(k: number) { return { house_ranch: 'Ranch house', house_twostory: 'Two-story house', house_modern: 'Modern house' }[this.slots[k].type]; }
+
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h);

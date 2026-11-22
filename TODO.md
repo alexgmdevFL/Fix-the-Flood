@@ -20,6 +20,7 @@
 <details>
 <summary>Recently Done</summary>
 
+- Tap info, style A: info card anchored to the tapped spot (soil column, key numbers, reason, actions right there). Alerts pinned on the map: flooding, backflow, septic failing, sewer overflow. Inspect is the default tool. Hint strip has colored label chips and pops when it changes.
 - Milestone 4 start: Level 2 Septic season. Septic drainfields fail when the water table is within 9 in, sewage surfaces and spreads with the water, Sewer tool connects a row to a lift station, floodwater leaking into manholes can overload it.
 - Area view: light watershed tint over the real map, striped 'if nothing drained' bathtub surface, labels kept on screen.
 - Decluttered mobile UI: compact header, one swipeable tool row, Play bar, everything else in a More sheet, small zoom buttons, slim hint strip.
