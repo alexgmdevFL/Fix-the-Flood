@@ -85,6 +85,16 @@ export function placeData(js: PlaceJSON, floorOffset = js.calib?.floorOffset ?? 
   let clean = CLEAN.get(js);
   if (!clean) { clean = despike(flattenBuildings(js.elev, js), js.open, n); CLEAN.set(js, clean); }
   const elev = clean.slice();
+  for (let i = 0; i < n * n; i++) {
+    if (!js.open[i]) continue;
+    const x = i % n, y = Math.floor(i / n);
+    let shore = false;
+    for (let dy = -1; dy <= 1 && !shore; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const X = x + dx, Y = y + dy;
+      if (X >= 0 && Y >= 0 && X < n && Y < n && !js.open[Y * n + X]) { shore = true; break; }
+    }
+    if (shore) elev[i] = Math.min(js.tide.mhhw - 0.6, -1.0);
+  }
   const houses: House[] = js.houses.map(cells => {
     let mx = -99, mn = 99;
     for (const c of cells) { mx = Math.max(mx, elev[c]); mn = Math.min(mn, elev[c]); }

@@ -110,6 +110,7 @@ export class World {
   private wetT = 0;
   private hints = new THREE.Group();
   private seaNormal: THREE.DataTexture;
+  private seaWater!: THREE.ShaderMaterial;
 
   level: Level;
   outfallVel = new THREE.Vector3(-2.2, 0.6, 0);
@@ -203,8 +204,16 @@ export class World {
     this.seaNormal.repeat.set(60, 60);
     const seaMat = new THREE.MeshStandardMaterial({ color: 0x1b5566, roughness: 0.18, metalness: 0.1, normalMap: this.seaNormal, normalScale: new THREE.Vector2(0.5, 0.5) });
     const half = n / 2 - 0.5, F = 400;
+    void seaMat;
+    const seaWater = makeWaterMaterial(sunDir);
+    this.seaWater = seaWater;
     const seaRect = (x0: number, x1: number, z0: number, z1: number) => {
-      const p = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), seaMat);
+      const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0, 8, 8);
+      const cnt = geo.attributes.position.count;
+      geo.setAttribute('aDepth', new THREE.BufferAttribute(new Float32Array(cnt).fill(6), 1));
+      geo.setAttribute('aFlow', new THREE.BufferAttribute(new Float32Array(cnt * 2), 2));
+      geo.setAttribute('aConc', new THREE.BufferAttribute(new Float32Array(cnt), 1));
+      const p = new THREE.Mesh(geo, seaWater);
       p.rotation.x = -Math.PI / 2;
       p.position.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
       p.receiveShadow = true;
@@ -889,6 +898,7 @@ export class World {
     (this.scene.fog as THREE.Fog).color.setRGB(0.79 - 0.3 * st + fl * 0.2, 0.86 - 0.3 * st + fl * 0.2, 0.9 - 0.28 * st + fl * 0.2);
     this.waterMat.uniforms.uRain.value = Math.min(1, v.rain / 4);
     this.waterMat.uniforms.uDark.value = st;
+    for (const k of ['uTime', 'uRain', 'uDark'] as const) this.seaWater.uniforms[k].value = this.waterMat.uniforms[k].value;
 
     // Ground wetness: soaks in with rain, stays wet under water, dries slowly after
     const wet = this.wet;

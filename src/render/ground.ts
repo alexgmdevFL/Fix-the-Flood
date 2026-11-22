@@ -10,6 +10,8 @@ export interface Rect { x0: number; y0: number; x1: number; y1: number; color: s
 export function padTerrain(sim: Sim): Padded {
   const n = sim.n, m = n + 2 * PAD;
   const elev = new Float32Array(m * m), surf = new Uint8Array(m * m);
+  const landE = Array.from(sim.elev).filter((_, i) => !sim.open[i]).sort((a, b) => a - b);
+  const base = landE.length ? landE[Math.floor(landE.length / 2)] : 2;
   for (let y = 0; y < m; y++) {
     for (let x = 0; x < m; x++) {
       const gx = x - PAD, gy = y - PAD;
@@ -17,9 +19,8 @@ export function padTerrain(sim: Sim): Padded {
       let e = sim.elev[cy * n + cx];
       let s: number = sim.surface[cy * n + cx];
       if (s === S.House) s = S.Grass;
-      if (gx < 0) e -= 0.3 * -gx;
-      if (gx >= n) e -= 0.3 * (gx - n + 1);
-      if ((gy < 0 || gy >= n) && s === S.Grass) e += 0.12 * Math.sin(x * 0.7) * Math.cos(y * 0.6);
+      const out = Math.max(0, -gx, gx - n + 1, -gy, gy - n + 1); // tiles beyond the grid edge
+      if (out > 0 && s !== S.Water) e = base + (e - base) * Math.exp(-out / 4) + 0.12 * Math.sin(x * 0.7) * Math.cos(y * 0.6);
       elev[y * m + x] = Math.max(-7, e);
       surf[y * m + x] = s;
     }
