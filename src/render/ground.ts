@@ -82,6 +82,9 @@ export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, r
     g.fillRect(px, py, sz, sz * (s === S.Grass ? 2 : 1));
   }
 
+  // Lots first (house pads, driveways, pools), so streets paint over them and driveways stop at the curb
+  for (const e of extras) rect(e.x0, e.y0, e.x1, e.y1, e.color);
+
   // Roads from their real paths: sidewalk, curb shadow, asphalt, then a center line on bigger roads
   g.lineCap = 'round'; g.lineJoin = 'round';
   const stroke = (pts: [number, number][], width: number, color: string, dash?: number[]) => {
@@ -110,7 +113,6 @@ export function paintGround(p: Padded, n: number, extras: Rect[], SIZE = 2048, r
   g.fillStyle = '#c4c0b8';
   for (const b of big) { g.beginPath(); b.pts.forEach(([x, y], j) => { if (j) g.lineTo(X(x), X(y)); else g.moveTo(X(x), X(y)); }); g.closePath(); g.fill(); }
 
-  for (const e of extras) rect(e.x0, e.y0, e.x1, e.y1, e.color);
 
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
